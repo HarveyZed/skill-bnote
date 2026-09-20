@@ -8,7 +8,7 @@
 **body（时间行）** / **loop（派修循环）** / manifest / prompt / profile / glossary / remap / **xref（跨讲工作表）**）；
 `bnote/segmenters/stable.py` 是切片核心；`references/contracts/*.md` 是写作契约模板；
 `config/default.toml` 是全部参数（`BN_<段>_<键>` 可覆盖，参数表见 `references/params.md`）。
-改契约或产物结构后跑 `scripts/gen-references.py` 刷新 `references/params.md` 与 `references/schema/*`（`references/dsh-notes.md` 是手写的，不受影响）。
+改契约或产物结构后，在**仓库里**跑 `scripts/gen-references.py` 刷新 `references/params.md` 与 `references/schema/*`（`references/dsh-notes.md` 是手写的，不受影响）。**该脚本属维护者工具，不随 skill 安装**——只有仓库里有。
 `xref` 的前置条件是各集已有 `_meta/note_hooks.json`（即先跑过 `note`），否则钩子为空。
 设计与取舍、已知问题清单、路线图见随 skill 一起安装的 `README.md`（`SKILL.md` 只讲怎么用）。
 
@@ -17,8 +17,8 @@
 ## 版本与发布
 
 1. SKILL.md 的 `metadata.version` 升版本（主版本=产物结构不兼容；次版本=新增能力；修订号=修 bug 与调参），**同时把 `pyproject.toml` 的 `version` 改成同一个值**（两处必须一致）；
-2. CHANGELOG.md 顶部加一节（**install 脚本会检查该小节存在，缺了直接拒绝安装**）；
-3. `bash scripts/install-skill.sh` 整目录同步到你所用 harness 的 skill 根目录（DSH 是 `$DSH_HOME/skills/bnote/`）；脚本会打印版本、release note、文件数、两边 md5；
+2. 对外变更写进 **GitHub Releases**；若维护者本地保留了发布日记 `CHANGELOG.md`，在顶部加一节（**本地有该文件时 install 脚本会检查这一节存在，缺了直接拒绝安装**）；
+3. 在**仓库里**跑 `bash scripts/install-skill.sh` 整目录同步到你所用 harness 的 skill 根目录（DSH 是 `$DSH_HOME/skills/bnote/`，其它 harness 用 `--dest=<目录>`）；脚本会打印版本、release note、文件数、两边 md5。**发布脚本本身也不随 skill 安装**；
 4. 确认仓库版与安装版一致。
 
 > 仓库里的 SKILL.md 是唯一真源，安装目录那份是复制品。DSH 的 skill 目录**每次 load 都重读文件**，

@@ -57,7 +57,9 @@ EXCLUDES=(--exclude=./env --exclude=./cache --exclude=./out --exclude=./logs
           # 检查报告与检查用临时目录：仓库内产物，使用者不需要（.bnote-review 正常在仓库外，这里只作保险）
           --exclude=./SKILL-REVIEW.md --exclude=./.bnote-review
           # 发布日记：不进公开仓库，也不随 skill 安装
-          --exclude=./CHANGELOG.md)
+          --exclude=./CHANGELOG.md
+          # 维护者工具：留在仓库里，使用者不需要（入口与建环境脚本仍在发行集合内）
+          --exclude=./scripts/install-skill.sh --exclude=./scripts/gen-references.py)
 [ "$WITH_LOCAL" -eq 1 ] || EXCLUDES+=(--exclude=./config/local.toml)
 
 if [ "$DRY" -eq 1 ]; then
