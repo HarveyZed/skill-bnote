@@ -1,0 +1,15 @@
+env/
+cache/
+out/
+logs/
+config/local.toml
+auth/
+*.pyc
+__pycache__/
+*.egg-info/
+.bnote-review/
+HANDOFF.md
+SKILL-REVIEW.md
+scripts/dev/
+# 发布日记：作者的开发记录，不进公开仓库、也不随 skill 安装（对外变更写进 GitHub Releases）
+CHANGELOG.md

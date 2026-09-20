@@ -1,0 +1,35 @@
+# 复制为 config/local.toml 后生效（优先级：环境变量 > 本文件 > default.toml）
+# 这里只写需要覆盖的项，未写的沿用 default.toml
+
+[paths]
+# root = "/mnt/data/bnote"
+# cache_dir = ""
+# out_dir = ""
+
+[auth]
+# B站登录态（可选）。两种写法：
+#   cookie_file = "~/.config/bnote/cookies.txt"   # Netscape 格式（浏览器插件导出）
+#   cookie_file = "~/.config/bnote/sessdata.txt"  # 内容就一行 SESSDATA=xxxx
+
+[media]
+# max_height = 1080        # 想更快可降 720（但 PPT 小字会糊）
+# audio_only = false
+# sections = "00:00:00-00:10:00"
+
+[subtitle]
+# backends = ["bili", "file", "whisper"]
+# whisper_model = "medium"     # small 更快，medium 更准
+# whisper_prompt = "FDE, 提示词工程, Prompt Engineering, RAG, Agent, Skill, MCP"   # 术语表
+
+[frames]
+# fps = 2
+# region = [0.0, 0.0, 1.0, 1.0]   # [左, 上, 右, 下] 相对坐标，用于裁掉摄像头/弹幕
+# crop = ""                      # 也可直接写 ffmpeg crop 参数 "w:h:x:y"
+
+[segment]
+# stable_min_sec = 1.5
+# diff_threshold = 0.035
+# strategy = "stable"
+
+[ocr]
+# enabled = true

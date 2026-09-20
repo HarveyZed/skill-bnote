@@ -1,0 +1,145 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "bnote-chapters/1",
+  "type": "object",
+  "required": [
+    "schema",
+    "video",
+    "slide_count",
+    "chapters"
+  ],
+  "properties": {
+    "schema": {
+      "const": "bnote-chapters/1"
+    },
+    "video": {
+      "type": "object"
+    },
+    "slide_count": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "scaffolded_at": {
+      "type": "string"
+    },
+    "chapters": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/definitions/chapter"
+      }
+    }
+  },
+  "definitions": {
+    "chapter": {
+      "type": "object",
+      "required": [
+        "id",
+        "title",
+        "range",
+        "slides",
+        "body",
+        "keypoints",
+        "questions"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[0-9]{2,}$"
+        },
+        "title": {
+          "type": "string"
+        },
+        "range": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {
+            "type": "string",
+            "pattern": "^[0-9]{2}:[0-9]{2}:[0-9]{2}$"
+          }
+        },
+        "slides": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "body": {
+          "type": "string",
+          "pattern": "^[^/]+[.]md$"
+        },
+        "keypoints": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        },
+        "questions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        },
+        "corrections": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "wrong",
+              "right",
+              "evidence"
+            ],
+            "properties": {
+              "wrong": {
+                "type": "string"
+              },
+              "right": {
+                "type": "string"
+              },
+              "evidence": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "review_flags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "coverage_notes": {
+          "type": "string"
+        },
+        "stage_merges": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "slides",
+              "kept"
+            ],
+            "properties": {
+              "slides": {
+                "type": "array",
+                "items": {
+                  "type": "integer"
+                }
+              },
+              "kept": {
+                "type": "integer"
+              },
+              "why": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

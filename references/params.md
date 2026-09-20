@@ -1,0 +1,350 @@
+# bnote 参数表（由 bnote config --md 生成，勿手改）
+
+环境变量覆盖写法：BN_<段>_<键>，例如 BN_SEGMENT_DIFF_THRESHOLD=0.02。
+数据根解析顺序：BNOTE_ROOT > config/local.toml 的 [paths] root > <cwd>/.bnote。
+
+| 段 | 键 | 默认值 |
+|---|---|---|
+| auth | cookie_file | `''` |
+| bundle | chapter_gap_sec | `25.0` |
+| bundle | propose_chapters | `True` |
+| bundle | transcript_max_chars | `0` |
+| export | desc_max_chars | `14` |
+| export | title_field | `'title'` |
+| export | title_max_chars | `30` |
+| frames | crop | `''` |
+| frames | fps | `2` |
+| frames | jpg_quality | `3` |
+| frames | region | `[0.0, 0.0, 1.0, 1.0]` |
+| frames | scale_height | `720` |
+| loop | max_rounds | `2` |
+| manifest | keypoints_min | `2` |
+| manifest | time_tolerance_sec | `1` |
+| media | audio_only | `False` |
+| media | concurrent | `1` |
+| media | format | `''` |
+| media | keep_video | `True` |
+| media | max_height | `1080` |
+| media | proxy | `''` |
+| media | retries | `3` |
+| media | sections | `''` |
+| media | sleep_requests | `1.0` |
+| merge | enabled | `True` |
+| merge | filename | `'lecture.md'` |
+| merge | include_transcript | `False` |
+| merge | outline | `'list+table'` |
+| merge | standalone | `True` |
+| merge | standalone_filename | `'lecture.standalone.md'` |
+| note | anchor_candidate_limit | `40` |
+| note | anchor_preview_chars | `30` |
+| note | derive_index | `True` |
+| note | enabled | `True` |
+| note | export_hooks | `True` |
+| note | field_labels | `['提炼', '联想', '问答', '钩子']` |
+| note | filename | `'note.md'` |
+| note | glossary_terms_limit | `20` |
+| note | head_sections | `['本课定位', '节点索引']` |
+| note | max_nodes | `30` |
+| note | max_ratio | `0.2` |
+| note | min_nodes | `6` |
+| note | mode | `'timeline-nodes'` |
+| note | paragraph_anchor_limit | `400` |
+| note | paragraph_preview_chars | `36` |
+| note | require_per_node | `['提炼']` |
+| note | tail_sections | `['带走三件事', '未解之问', '自测', '行动']` |
+| ocr | enabled | `True` |
+| ocr | engine | `'rapidocr'` |
+| ocr | min_text_chars | `8` |
+| ocr | weight_chars | `1.0` |
+| ocr | weight_ink | `30.0` |
+| ocr | weight_sharp | `5.0` |
+| paths | cache_dir | `''` |
+| paths | contracts_dir | `''` |
+| paths | keep_cache | `True` |
+| paths | log_dir | `''` |
+| paths | out_dir | `''` |
+| paths | root | `''` |
+| paths | state_dir | `''` |
+| profile | domain_lexicon | `{'提示词, prompt': ['prompt', 'zero-shot', 'few-shot', 'CoT', '思维链', '角色提示', '元提示', '提示词注入'], 'rag, 检索, 知识库': ['RAG', 'embedding', 'chunk', 'vector DB', 'rerank', '知识库', '检索增强生成', '向量'], 'agent, 智能体': ['Agent', 'function calling', 'tool calling', 'memory', 'MCP', '工作流'], '攻击, 防御, 安全, 注入': ['prompt injection', 'jailbreak', '越狱', '纵深防御', '红队'], '微调, finetune, lora': ['fine-tuning', 'LoRA', 'SFT', 'RLHF', 'Adapter'], '多模态, 视觉': ['VLM', '多模态', 'CLIP', '视觉编码器'], 'fde, 产品经理, 架构': ['FDE', 'Agent', 'RAG', 'API', '工作流'], 'python, 代码, 编程': ['Python', 'API', 'SDK', 'JSON', '函数']}` |
+| profile | stopwords | `['bilibili', 'lilibili', 'bilibihi', 'bilbli', 'bilibi', 'bilibl', 'ilii', 'http', 'https', 'www', 'com', 'cn', 'html', 'jpg', 'png', 'the', 'and', 'for', 'one', 'two', 'you', 'our']` |
+| prompt | desc_cap | `1500` |
+| scaffold | noise_patterns | `['bilibili', 'lilibili', '讲师[:：]\\s*\\S+', '第[一二三四五六七八九十]+章[:：]?', 'pptx', 'powerpoint', '幻灯片放映', '幻灯片第\\s*\\d+\\s*张', '共\\s*\\d+\\s*张']` |
+| segment | absorb_thin_chars | `20` |
+| segment | absorb_thin_contain | `0.5` |
+| segment | absorb_thin_max_sec | `60.0` |
+| segment | additive_changed_max | `0.6` |
+| segment | additive_ink_gain | `1.03` |
+| segment | additive_old_ink_max | `0.12` |
+| segment | auto_caption_strip | `True` |
+| segment | boilerplate_patterns | `['pptx', 'powerpoint', '幻灯片放映', '显示器设置', '幻灯片第\\s*\\d+\\s*张', '共\\s*\\d+\\s*张', 'bilibili']` |
+| segment | candidates_per_seg | `6` |
+| segment | caption_band_multiple | `2.5` |
+| segment | caption_strip_ratio | `0.14` |
+| segment | diff_alpha | `0.5` |
+| segment | diff_threshold | `0.035` |
+| segment | merge_additive | `True` |
+| segment | merge_gram_contain | `0.45` |
+| segment | merge_hash_dist | `6` |
+| segment | merge_max_gap_sec | `30.0` |
+| segment | merge_max_span_sec | `240.0` |
+| segment | merge_text_contain | `0.85` |
+| segment | merge_text_min_chars | `16` |
+| segment | min_seg_sec | `4.0` |
+| segment | ocr_consensus | `True` |
+| segment | page_cut_lookback_sec | `1.5` |
+| segment | page_cut_multiple | `3.0` |
+| segment | page_cut_only_cuts | `True` |
+| segment | page_cut_percentile | `0.85` |
+| segment | scene_threshold | `0.04` |
+| segment | snap_to_transcript | `True` |
+| segment | snap_window_sec | `3.0` |
+| segment | stable_min_sec | `1.5` |
+| segment | strategy | `'stable'` |
+| subtitle | auto_retry_partial | `True` |
+| subtitle | backends | `['bili', 'file', 'whisper']` |
+| subtitle | file_path | `''` |
+| subtitle | lang_priority | `['ai-zh', 'zh-Hans', 'zh-CN', 'zh', 'en']` |
+| subtitle | max_coverage | `1.2` |
+| subtitle | min_coverage | `0.8` |
+| subtitle | whisper_beam | `1` |
+| subtitle | whisper_compute | `'int8'` |
+| subtitle | whisper_device | `'cpu'` |
+| subtitle | whisper_lang | `'zh'` |
+| subtitle | whisper_model | `'medium'` |
+| subtitle | whisper_prompt | `''` |
+| subtitle | whisper_threads | `16` |
+| subtitle | whisper_vad | `True` |
+| text | anchor_drift_head_chars | `40` |
+| text | anchor_drift_min_chars | `12` |
+| text | anchor_drift_window | `3` |
+| text | anchor_every_sec | `300.0` |
+| text | chunk_chars | `6000` |
+| text | max_para_sec | `120.0` |
+| text | min_cover_ratio | `0.85` |
+| text | para_gap_sec | `1.2` |
+| tools | ffmpeg | `''` |
+| tools | ffprobe | `''` |
+| tools | python | `'python3'` |
+| tools | yt_dlp | `''` |
+
+## config/default.toml 原文
+
+```toml
+# bnote 默认配置。任何一项都可以被 config/local.toml 或环境变量 BN_<SECTION>_<KEY> 覆盖。
+# 环境变量优先级： env > local.toml > default.toml
+# 例： BN_MEDIA_MAX_HEIGHT=720 BN_FRAMES_FPS=1 BN_SEGMENT_STABLE_MIN_SEC=2.0
+
+[paths]
+# 数据根。解析顺序： BNOTE_ROOT 环境变量 > 本项 > <当前工作目录>/.bnote
+# 默认**不是绝对路径**：skill 装到哪台机器都能跑，数据跟着调用时的工作目录走。
+root           = ""
+state_dir      = ""            # state/<vid>/ 跨集沉淀（术语表、画像、登录态）；删 cache 不带走
+cache_dir      = ""            # cache/<vid>/ 中间产物（可随时删）
+out_dir        = ""            # out/<vid>/  最终交付（Markdown/图片）；内部结构冻结
+log_dir        = ""            # logs/
+# 契约模板目录（写作 prompt 模板与 schema）。相对 **skill 根**，属于 skill 资产，可外置。
+contracts_dir  = ""            # 留空 = <skill 根>/references/contracts
+keep_cache     = true          # 跑完是否保留 cache（false 时 bundle 后自动删帧）
+
+[tools]
+# 解释器：venv 不随 skill 走，换机器请指向该机的 python（BN_PYTHON 可覆盖）
+python         = "python3"
+# 外部程序；留空 = 自动探测（PATH -> imageio-ffmpeg 内置静态包）
+ffmpeg         = ""
+ffprobe        = ""
+yt_dlp         = ""            # 留空 = 用当前 python 的 yt_dlp 模块
+
+[auth]
+# 可选：B 站登录态。三种写法任选
+#   1) Netscape cookies.txt 路径
+#   2) 纯文本文件，内容形如 SESSDATA=xxxx
+#   3) 环境变量 BN_AUTH_SESSDATA
+cookie_file    = ""
+
+[media]
+max_height     = 1080          # 720 更快，1080 更适合读 PPT 小字
+format         = ""            # 留空 = 自动: bv*[height<=H]+ba/b[height<=H]
+audio_only     = false         # true = 只下音轨(m4a)，供 ASR 用
+sections       = ""            # 例 "00:05:00-00:20:00"，只下片段（试跑用）
+keep_video     = true          # 抽帧后是否保留 mp4
+retries        = 3
+sleep_requests = 1.0           # 每个请求间隔，防风控
+concurrent     = 1
+proxy          = ""
+
+[subtitle]
+# 按顺序尝试；失败的自动跳到下一个
+backends       = ["bili", "file", "whisper"]
+# 字幕轨优先级（正则，按序匹配 lan 字段）
+lang_priority  = ["ai-zh", "zh-Hans", "zh-CN", "zh", "en"]
+file_path      = ""            # backend=file 时使用的 srt/ass/json
+# 注意：优先用 B 站官方 AI 字幕（需登录态：bnote auth login）。Whisper 是兜底，
+# 讲课类音频用 small 会明显出别字，建议至少 medium。
+min_coverage   = 0.8           # 覆盖度下限：max(to)/时长 低于此值判为残轨，继续试下一个后端
+max_coverage   = 1.2           # 覆盖度上限：高于此值说明时间轴超出片长（疑似整段轨/串 P），同样换后端
+auto_retry_partial = true      # 缓存里的轨覆盖度不达标时，重跑是否自动重试一次（false = 缓存永远优先，只能 --force 重取）
+whisper_model  = "medium"      # tiny/base/small/medium/large-v3
+whisper_device = "cpu"         # 沙箱内无 GPU；有 GPU 时可改 cuda
+whisper_compute= "int8"
+whisper_beam   = 1
+whisper_vad    = true
+whisper_threads= 16
+whisper_lang   = "zh"
+whisper_prompt = ""            # 可填术语表，引导识别（如 "FDE, 提示词工程, RAG, Agent"）
+
+[frames]
+fps            = 2             # 抽帧频率；2fps 足够刻画幻灯片节奏
+scale_height   = 720           # 抽帧后缩放高度（0=不缩放）
+crop           = ""            # ffmpeg crop 参数 "w:h:x:y"，用于裁掉摄像头/侧栏
+jpg_quality    = 3             # ffmpeg -q:v，2~5
+region         = [0.0, 0.0, 1.0, 1.0]   # 参与"稳定性判定"的画面区域 [l,t,r,b]（相对坐标），默认全画面
+
+[segment]
+strategy            = "stable"  # stable(默认，稳定态+终态收敛) | scene(基线对照)
+stable_min_sec      = 1.5       # 连续低于阈值的时长达到该值才算"一页讲完"
+diff_threshold      = 0.035     # 归一化帧差阈值；越小越敏感
+diff_alpha          = 0.5       # 帧差构成： alpha*dHash汉明率 + (1-alpha)*像素平均绝对差
+min_seg_sec         = 4.0       # 短于该时长的段直接并入相邻段
+merge_hash_dist     = 6         # 相邻段终态 dHash 汉明距离 <= 此值判定为"同一页"（整体重绘但内容相同）
+merge_max_gap_sec   = 30.0      # 合并的时间间隔上限（注意：段是连续切分的，gap 恒为 0，此值只作保险）
+merge_max_span_sec  = 240.0     # 单页累计时长上限，防止链式合并把整段视频并成一页
+merge_gram_contain = 0.45       # 终态 OCR 文本的 **4-gram 包含度** >= 此值才判为"同一页的不同阶段"（v0.7.2）
+                                # 为什么不用字符集包含度：同套 PPT 的页眉/标题栏/“幻灯片第N张”等样板字
+                                # 会让任意两页的字符集包含度都在 0.5-0.9（实测 p24 两张完全不同的页达到 0.88），
+                                # 于是"同页"误判把一页内容并掉。4-gram 实测同页 0.53、异页 ≤0.31，可分。
+merge_text_contain = 0.85       # （已弃用，保留仅为兼容旧配置）字符集包含度阈值
+merge_text_min_chars = 16       # 参与包含度判定的文本至少这么长（讲者手写标注页很短，40 会漏合并）
+merge_additive      = true      # 用"增量绘制"判据识别同页动画（新元素画在原本空白处）
+additive_changed_max= 0.6       # 变化区域占比超过该值视为整页重绘（换页）
+additive_old_ink_max= 0.12      # 变化区域内原本的墨迹比例低于该值 = 原本是空白 -> 增量绘制
+additive_ink_gain   = 1.03      # 增量绘制还需满足：整体墨迹比上一状态更多（只加不减）
+absorb_thin_chars   = 20        # 文字量低于该值且时长短的段，会被邻近内容页吸收
+absorb_thin_max_sec = 60.0   # 薄页时长上限（放宽：动画慢的页可能持续很久）
+absorb_thin_contain = 0.5       # 薄段与邻居的文本包含度下限（防止把独立的短页吞掉）
+candidates_per_seg  = 6         # 每段送 OCR 的候选帧数（含首/末/最大墨迹/最清晰 + 均匀采样）
+snap_to_transcript  = true      # 段边界吸附到最近的字幕句首
+snap_window_sec     = 3.0
+page_cut_only_cuts  = true      # 只有"硬切"（大幅帧差）才算换页，小幅变化按同页标注处理
+page_cut_percentile = 0.85      # 硬切门槛：帧差分位数
+page_cut_multiple   = 3.0       # 硬切门槛的辅助倍数
+page_cut_lookback_sec = 1.5     # 稳定段起点前多久内出现硬切才算换页
+ocr_consensus       = true      # 对前两名候选各跑一次 OCR 并按行合并（降低单次识别误差）
+auto_caption_strip  = true      # 自动识别烧进画面的口播字幕条并排除出稳定性判定与 OCR
+caption_strip_ratio = 0.14      # 字幕条高度占画面比例（自下而上）
+caption_band_multiple = 2.5     # 底部变化率相对中部倍数达到该值才判定为字幕条
+scene_threshold     = 0.04      # strategy=scene 时的 ffmpeg scene 阈值（基线用）
+# 幻灯片样板文字（窗口标题栏 / 页码 / 站名水印）：做"同页判定"前先剔除，否则任意两页都"很像"。
+# 课程专有的页眉字样请写进 config/local.toml 的 [segment] 段。
+boilerplate_patterns = [
+  'pptx', 'powerpoint', '幻灯片放映', '显示器设置',
+  '幻灯片第\s*\d+\s*张', '共\s*\d+\s*张', 'bilibili',
+]
+
+[ocr]
+enabled        = true          # 未装 rapidocr 时自动降级为"墨迹密度"打分
+engine         = "rapidocr"
+min_text_chars = 8             # 少于该字数视为无文字帧
+weight_chars   = 1.0           # 终态选帧打分：OCR 字数权重
+weight_ink     = 30.0          # 墨迹(非背景像素)占比权重
+weight_sharp   = 5.0           # 清晰度(拉普拉斯方差)权重
+
+[bundle]
+transcript_max_chars = 0       # >0 时对 transcript.md 截断（默认 0=不截断，保完整）
+chapter_gap_sec      = 25.0    # 相邻 slide 间隔超过该值即视为新章节边界（供 agent 参考）
+propose_chapters     = true
+
+[merge]
+# 把章节正文合并成一份可直接阅读的单文件讲义
+enabled            = true
+filename           = "lecture.md"
+standalone         = true
+standalone_filename= "lecture.standalone.md"
+include_transcript = false
+# 大纲样式：list+table（默认，原生渲染、天然有序）| timeline（附加 mermaid 时间线）| list
+outline            = "list+table"
+
+[note]
+# 单 lecture 学习笔记：沿原视频时间轴的"关键节点 + 理解层注释"
+# 定位：lecture 是视频的文字版（完整、按时间、配图）；note 是"看完这节我要带走什么"，
+#       只保留关键节点，节点上挂 提炼 / 联想 / 问答 / 钩子 四类注释。
+enabled            = true
+filename           = "note.md"
+mode               = "timeline-nodes"
+min_nodes          = 6
+max_nodes          = 30
+head_sections      = ["本课定位", "节点索引"]
+tail_sections      = ["带走三件事", "未解之问", "自测", "行动"]
+field_labels       = ["提炼", "联想", "问答", "钩子"]
+require_per_node   = ["提炼"]
+max_ratio          = 0.20
+export_hooks       = true
+derive_index        = true    # 节点索引由工具从节点标题派生（agent 不写，也不占内容预算）
+anchor_candidate_limit = 40  # note_brief 里「小节锚点候选」表最多列几条（超出按均匀抽样，保留首尾）
+paragraph_anchor_limit = 400 # 信息流模式：note_brief 里最多列多少个段落锚点（超长视频的截断线）
+glossary_terms_limit   = 20  # 注入 note_brief 的已确认术语条数上限
+paragraph_preview_chars = 36 # 信息流模式：段落锚点表里每段的字幕预览字数（给写手的材料，调大更完整）
+anchor_preview_chars    = 30 # 锚点候选表里"那一刻的字幕首句"预览字数
+
+[text]
+# 信息流 / 口播类（无幻灯片）模式：只用音频 + 字幕，不抽帧、不切片、不分章。
+para_gap_sec     = 1.2      # 相邻字幕段间隔 >= 此值 -> 另起一段
+max_para_sec     = 120.0    # 单段最长时长（秒），超过强制切
+anchor_every_sec = 300.0    # 导航锚点间隔（秒）；0 = 只用段落锚点
+chunk_chars      = 6000     # 每块给 writer 的字数上限（渐进式披露的块大小）
+min_cover_ratio  = 0.85     # 整理稿**正文** / 字幕正文 的下限（防摘要化）。12 集实测合法区间 0.913~1.197（写手会收敛口头语），滥用案例 0.55；0.98 会把合法产物判错
+# 锚点走位启发式的阈值（只警告、不判错）：实测 8 字门槛会误报（P3「gent的开发和」、P8「ontology」），收紧到 12 字后假阳性消失、真阳性仍会报
+anchor_drift_min_chars = 12   # 首句与更早段落的最短重合字数，低于此不提示
+anchor_drift_head_chars = 40  # 只在小节首句的前 N 个字里找重合
+anchor_drift_window = 3       # 往前回看多少个段落
+
+[export]
+# bnote export --format bili-note：把讲义/笔记导出成"可直接粘贴进 B 站笔记"的富文本（CF_HTML）。
+# 产出 out/<vid>/_meta/ 下三份文件：bili_note_<来源>.html（剪贴板格式）、同名 .md（预览）、bili_note_clip.ps1（Windows 装载）。
+# 为什么有上限：B 站笔记的锚点节点（div.ql-tag-blot）**desc 上限实测是 14 个字符**，给多了节点会退化
+# 成不可点；显示文本太长则整条标签被截得看不出是什么，所以也留一个。
+desc_max_chars  = 14           # 锚点 data-desc（用小节标题）的字数上限，超出以「…」结尾（0 = 不截断）
+title_max_chars = 30           # 锚点显示文本（<标题> P<分P> - MM:SS）里标题部分的字数上限（0 = 不截断）
+title_field     = "title"      # 锚点标题取 meta.json 的哪个字段：title=视频标题（默认）｜part=分P标题
+                               # 多分P课程建议改 part：视频标题常是"全 N 集"这种合集名，分P标题才说明这一讲讲什么
+
+[loop]
+# 派修循环（bnote check → brief --stage fix → fix → fix --done）
+max_rounds = 2           # 轮次上限；超过即标「建议升级给人」
+
+[prompt]
+# 派单 prompt 的注入参数
+desc_cap = 1500          # 视频简介注入时的截断字数（0 = 不截断）
+
+[manifest]
+# 章节结构文件 chapters/manifest.json 的校验参数（只校验结构，不校验用词）
+keypoints_min = 2
+time_tolerance_sec = 1   # 时间比较容差（秒）：章界 / 小节相邻判定允许的偏差
+
+[profile]
+# 术语画像：从字幕/OCR 里挖候选术语时的停用词，以及"标题命中关键词 → 预测白名单"的领域词典
+stopwords = [
+  'bilibili', 'lilibili', 'bilibihi', 'bilbli', 'bilibi', 'bilibl', 'ilii',
+  'http', 'https', 'www', 'com', 'cn', 'html', 'jpg', 'png',
+  'the', 'and', 'for', 'one', 'two', 'you', 'our',
+]
+
+[profile.domain_lexicon]
+'提示词, prompt' = ['prompt', 'zero-shot', 'few-shot', 'CoT', '思维链', '角色提示', '元提示', '提示词注入']
+'rag, 检索, 知识库' = ['RAG', 'embedding', 'chunk', 'vector DB', 'rerank', '知识库', '检索增强生成', '向量']
+'agent, 智能体' = ['Agent', 'function calling', 'tool calling', 'memory', 'MCP', '工作流']
+'攻击, 防御, 安全, 注入' = ['prompt injection', 'jailbreak', '越狱', '纵深防御', '红队']
+'微调, finetune, lora' = ['fine-tuning', 'LoRA', 'SFT', 'RLHF', 'Adapter']
+'多模态, 视觉' = ['VLM', '多模态', 'CLIP', '视觉编码器']
+'fde, 产品经理, 架构' = ['FDE', 'Agent', 'RAG', 'API', '工作流']
+'python, 代码, 编程' = ['Python', 'API', 'SDK', 'JSON', '函数']
+
+[scaffold]
+# 自动分章（--auto，仅供观察用；正式分章由 --groups 给定）从 OCR 文本里取标题时剔除的噪声。
+# 课程专有的页眉 / 水印请写进 config/local.toml 的 [scaffold] 段，不要污染默认值。
+noise_patterns = [
+  'bilibili', 'lilibili',
+  '讲师[:：]\s*\S+',
+  '第[一二三四五六七八九十]+章[:：]?',
+  'pptx', 'powerpoint', '幻灯片放映', '幻灯片第\s*\d+\s*张', '共\s*\d+\s*张',
+]
+```
