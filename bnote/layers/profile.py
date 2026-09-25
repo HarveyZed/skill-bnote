@@ -99,8 +99,12 @@ def _collection_corrections(paths) -> dict:
 def build(cfg: dict, paths, meta: dict, transcript: dict | None = None, slides: dict | None = None) -> dict:
     pc = cfg.get("profile", {})
     title = " ".join(str(x) for x in (meta.get("part"), meta.get("title")) if x)
-    # 领域预测额外看简介与标签（**不进术语观测**：简介常混推广链接与口号，会把白名单搞脏）
-    predict_src = " ".join([title, str(meta.get("desc") or ""), " ".join(meta.get("tags") or [])])
+    # 领域预测额外看简介 / 置顶评论 / 标签（**不进术语观测**：它们常混推广链接与口号，会把白名单搞脏）
+    # 置顶评论与简介同一权重：都是作者自己写的视频页说明（数据取自 meta.json 的 top_comment.text）
+    _toc = meta.get("top_comment") or {}
+    _toc_text = _toc.get("text") if isinstance(_toc, dict) else str(_toc or "")
+    predict_src = " ".join([title, str(meta.get("desc") or ""), str(_toc_text or ""),
+                            " ".join(meta.get("tags") or [])])
     ttext = "".join(s.get("text", "") for s in (transcript or {}).get("segments", []))
     stext = " ".join(s.get("ocr_text", "") for s in (slides or {}).get("slides", []))
     combined = ttext + "\n" + stext

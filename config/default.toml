@@ -30,6 +30,14 @@ yt_dlp         = ""            # 留空 = 用当前 python 的 yt_dlp 模块
 #   3) 环境变量 BN_AUTH_SESSDATA
 cookie_file    = ""
 
+[meta]
+# L1 元信息：除标题/时长/cid 外，还落盘 简介 / 标签 / 分区 / aid / UP 主置顶评论
+# 置顶评论只取 UP 置顶的那一条（data.upper.top），不做评论区批量采集：
+# 作者常把资料链接、勘误、答疑补充在置顶评论里——改简介等于重新发布视频，所以更愿意动这里。
+# 注意：取评论前要先请求一次视频页拿到 buvid3，缺了它评论接口会被风控挡回 HTTP 412。
+top_comment    = true          # false = 完全不请求评论接口（少两次 HTTP 请求）
+top_comment_timeout = 20       # 单次请求超时（秒）
+
 [media]
 max_height     = 1080          # 720 更快，1080 更适合读 PPT 小字
 format         = ""            # 留空 = 自动: bv*[height<=H]+ba/b[height<=H]
@@ -183,6 +191,7 @@ max_rounds = 2           # 轮次上限；超过即标「建议升级给人」
 [prompt]
 # 派单 prompt 的注入参数
 desc_cap = 1500          # 视频简介注入时的截断字数（0 = 不截断）
+top_comment_cap = 1000   # 置顶评论注入时的截断字数（0 = 不截断；置顶评论常带大段链接与答疑）
 
 [manifest]
 # 章节结构文件 chapters/manifest.json 的校验参数（只校验结构，不校验用词）

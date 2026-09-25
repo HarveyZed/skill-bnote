@@ -21,6 +21,25 @@ def _ts(sec: float) -> str:
     return "%02d:%02d:%02d" % (sec // 3600, (sec % 3600) // 60, sec % 60)
 
 
+def _top_comment_line(cfg: dict, meta: dict) -> str:
+    """index.md 里的置顶评论一节：同时给出作者与原文。
+
+    三种情况要分清：取到了 / 作者没置顶 / 这次没取（开关关了或接口被风控）——后两种不能混为一谈。
+    """
+    toc = meta.get("top_comment")
+    if isinstance(toc, dict):
+        text = (toc.get("text") or "").strip()
+        if text:
+            who = (toc.get("uname") or "").strip()
+            head = "作者 %s ｜ 赞 %s\n\n" % (who, toc.get("like")) if who else ""
+            return head + text
+    if not ((cfg or {}).get("meta") or {}).get("top_comment", True):
+        return "（已关闭置顶评论抓取：配置里 meta.top_comment = false）"
+    if meta.get("aid") is None:
+        return "（旧缓存没有 aid，未能抓取；重跑取数即可补上）"
+    return "（这条视频没有置顶评论，或本次未能取到——接口被风控时取数日志里会有一行提示）"
+
+
 def _propose_chapters(cfg, segments: list[dict]) -> list[dict]:
     gap = float(cfg["bundle"]["chapter_gap_sec"])
     chapters, cur = [], []
@@ -152,6 +171,10 @@ def build(cfg: dict, paths, meta: dict, transcript: dict, seg_data: dict) -> dic
         "## 视频简介（原文）",
         "",
         (meta.get("desc") or "（这条视频没有简介）"),
+        "",
+        "## UP 主置顶评论（原文）",
+        "",
+        _top_comment_line(cfg, meta),
         "",
         "## 大纲",
         "",

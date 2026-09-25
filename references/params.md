@@ -35,6 +35,8 @@
 | merge | outline | `'list+table'` |
 | merge | standalone | `True` |
 | merge | standalone_filename | `'lecture.standalone.md'` |
+| meta | top_comment | `True` |
+| meta | top_comment_timeout | `20` |
 | note | anchor_candidate_limit | `40` |
 | note | anchor_preview_chars | `30` |
 | note | derive_index | `True` |
@@ -68,6 +70,7 @@
 | profile | domain_lexicon | `{'提示词, prompt': ['prompt', 'zero-shot', 'few-shot', 'CoT', '思维链', '角色提示', '元提示', '提示词注入'], 'rag, 检索, 知识库': ['RAG', 'embedding', 'chunk', 'vector DB', 'rerank', '知识库', '检索增强生成', '向量'], 'agent, 智能体': ['Agent', 'function calling', 'tool calling', 'memory', 'MCP', '工作流'], '攻击, 防御, 安全, 注入': ['prompt injection', 'jailbreak', '越狱', '纵深防御', '红队'], '微调, finetune, lora': ['fine-tuning', 'LoRA', 'SFT', 'RLHF', 'Adapter'], '多模态, 视觉': ['VLM', '多模态', 'CLIP', '视觉编码器'], 'fde, 产品经理, 架构': ['FDE', 'Agent', 'RAG', 'API', '工作流'], 'python, 代码, 编程': ['Python', 'API', 'SDK', 'JSON', '函数']}` |
 | profile | stopwords | `['bilibili', 'lilibili', 'bilibihi', 'bilbli', 'bilibi', 'bilibl', 'ilii', 'http', 'https', 'www', 'com', 'cn', 'html', 'jpg', 'png', 'the', 'and', 'for', 'one', 'two', 'you', 'our']` |
 | prompt | desc_cap | `1500` |
+| prompt | top_comment_cap | `1000` |
 | scaffold | noise_patterns | `['bilibili', 'lilibili', '讲师[:：]\\s*\\S+', '第[一二三四五六七八九十]+章[:：]?', 'pptx', 'powerpoint', '幻灯片放映', '幻灯片第\\s*\\d+\\s*张', '共\\s*\\d+\\s*张']` |
 | segment | absorb_thin_chars | `20` |
 | segment | absorb_thin_contain | `0.5` |
@@ -160,6 +163,14 @@ yt_dlp         = ""            # 留空 = 用当前 python 的 yt_dlp 模块
 #   2) 纯文本文件，内容形如 SESSDATA=xxxx
 #   3) 环境变量 BN_AUTH_SESSDATA
 cookie_file    = ""
+
+[meta]
+# L1 元信息：除标题/时长/cid 外，还落盘 简介 / 标签 / 分区 / aid / UP 主置顶评论
+# 置顶评论只取 UP 置顶的那一条（data.upper.top），不做评论区批量采集：
+# 作者常把资料链接、勘误、答疑补充在置顶评论里——改简介等于重新发布视频，所以更愿意动这里。
+# 注意：取评论前要先请求一次视频页拿到 buvid3，缺了它评论接口会被风控挡回 HTTP 412。
+top_comment    = true          # false = 完全不请求评论接口（少两次 HTTP 请求）
+top_comment_timeout = 20       # 单次请求超时（秒）
 
 [media]
 max_height     = 1080          # 720 更快，1080 更适合读 PPT 小字
@@ -314,6 +325,7 @@ max_rounds = 2           # 轮次上限；超过即标「建议升级给人」
 [prompt]
 # 派单 prompt 的注入参数
 desc_cap = 1500          # 视频简介注入时的截断字数（0 = 不截断）
+top_comment_cap = 1000   # 置顶评论注入时的截断字数（0 = 不截断；置顶评论常带大段链接与答疑）
 
 [manifest]
 # 章节结构文件 chapters/manifest.json 的校验参数（只校验结构，不校验用词）

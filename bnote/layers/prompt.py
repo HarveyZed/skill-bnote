@@ -67,14 +67,22 @@ def zone_of(meta: dict) -> str:
 
 
 def video_meta_block(cfg: dict, meta: dict) -> str:
-    """视频页元信息块（简介/标签/分区）——给写手当背景，明确不许当课程内容写进正文。
+    """视频页元信息块（简介/UP 置顶评论/标签/分区）——给写手当背景，明确不许当课程内容写进正文。
 
-    简介截断长度取 `prompt.desc_cap`（默认 1500 字；0 = 不截断）。
+    截断长度：简介取 `prompt.desc_cap`（默认 1500），置顶评论取 `prompt.top_comment_cap`（默认 1000）；0 = 不截断。
+    置顶评论与简介**同一权重**：都是人写的背景信息（作者常把资料链接、勘误、答疑补充在这里，
+    因为改简介等于重新发布视频）；但同样不许当课程内容。
     """
-    cap = int(((cfg or {}).get("prompt") or {}).get("desc_cap", 1500))
+    pc = (cfg or {}).get("prompt") or {}
+    cap = int(pc.get("desc_cap", 1500))
+    tcap = int(pc.get("top_comment_cap", 1000))
     desc = (meta.get("desc") or "").strip()
     if cap > 0 and len(desc) > cap:
         desc = desc[:cap] + "…（简介过长已截断）"
+    topc = meta.get("top_comment") or {}
+    top = ((topc.get("text") if isinstance(topc, dict) else str(topc or "")) or "").strip()
+    if tcap > 0 and len(top) > tcap:
+        top = top[:tcap] + "…（置顶评论过长已截断）"
     tags = ", ".join(meta.get("tags") or []) or "（无）"
     lines = [
         "- 标题: %s" % (meta.get("part") or meta.get("title") or ""),
@@ -84,10 +92,15 @@ def video_meta_block(cfg: dict, meta: dict) -> str:
     ]
     if desc:
         lines += ["- 视频简介（原文，可能有推广与资料链接）:", "", desc]
+    if top:
+        who = (topc.get("uname") or "").strip() if isinstance(topc, dict) else ""
+        lines += ["- UP 主置顶评论（原文%s，作者常在这里补资料链接、勘误与答疑）:"
+                  % ("，作者 %s" % who if who else ""), "", top]
     lines += [
         "",
-        "> 简介是**背景信息**：可以用它判断这一集的主题、术语写法、是否属于某个系列；",
-        "> 但**不许**把它当成课程内容写进讲义/笔记正文（讲师在视频里没说的，就不算课程讲的）。",
+        "> 简介与置顶评论都是**背景信息**：可以用它们判断这一集的主题、术语写法、是否属于某个系列，",
+        "> 也可以据此找到作者给的资料链接；",
+        "> 但**不许**把它们当成课程内容写进讲义/笔记正文（讲师在视频里没说的，就不算课程讲的）。",
     ]
     return "\n".join(lines)
 
