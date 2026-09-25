@@ -37,7 +37,7 @@ def _top_comment_line(cfg: dict, meta: dict) -> str:
         return "（已关闭置顶评论抓取：配置里 meta.top_comment = false）"
     if meta.get("aid") is None:
         return "（旧缓存没有 aid，未能抓取；重跑取数即可补上）"
-    return "（这条视频没有置顶评论，或本次未能取到——接口被风控时取数日志里会有一行提示）"
+    return "（这条视频没有置顶评论，或本次未能取到——上游接口变化或平台风控时取数日志里会有一行提示）"
 
 
 def _propose_chapters(cfg, segments: list[dict]) -> list[dict]:
