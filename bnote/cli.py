@@ -115,8 +115,6 @@ def _banner(paths, cfg, vid):
     for line in describe(cfg):
         print("  " + line)
     print("  work dir: %s" % paths.out)
-    if not paths.meta.exists():
-        print("  ⚠ 该数据根下没有 %s 的取数结果 —— 检查调用时的 cwd，或用 BNOTE_ROOT 指定数据根" % vid)
     print("=" * 72)
 
 
