@@ -307,7 +307,7 @@ def _anchor_drift_warns(cfg, paths, paras: list, md: str) -> list:
             # 判据收紧：重合 >=12 字 **且**落在更早段落靠前处（<=40 字）才提示。
             # 8 字门槛会误报：实测 P3 命中「gent的开发和」、P8 命中单词「ontology」，两处锚点本来就是对的。
             if m.size >= min_chars and m.a <= _DRIFT_MATCH_HEAD and m.b <= head_chars:
-                warns.append({"level": "warn", "owner": "text",
+                warns.append({"level": "warning", "owner": "text",
                               "message": "小节 %s 的首句像是来自更早的段落 %s（%s）——合并相邻段落时请用**最早**那段的锚点"
                                          % (_ts(a_sec), paras[j]["id"], _ts(paras[j]["t_start"]))})
                 break
@@ -358,7 +358,7 @@ def validate(cfg, paths) -> tuple:
             dur = float(json.loads(meta_p.read_text(encoding="utf-8")).get("duration") or 0)
             last_end = max((p["t_end"] for p in paras), default=0)
             if dur and last_end > dur * 1.05:
-                warns.append({"level": "warn", "owner": "pipeline",
+                warns.append({"level": "warning", "owner": "pipeline",
                               "message": "段落时间轴到 %ds，超出片长 %ds —— 字幕轨道可能属于整段视频或串了别的分 P"
                                          % (last_end, dur)})
         tp = paths.subtitle / "transcript.json"
@@ -366,11 +366,11 @@ def validate(cfg, paths) -> tuple:
             td = json.loads(tp.read_text(encoding="utf-8"))
             cov = td.get("coverage")
             if td.get("partial") or (cov is not None and cov < 0.8):
-                warns.append({"level": "warn", "owner": "pipeline",
+                warns.append({"level": "warning", "owner": "pipeline",
                               "message": "字幕是残轨（覆盖度 %s）——这份稿子只覆盖了一小段片长，别当完整讲义"
                                          % (("%.1f%%" % (cov * 100)) if cov is not None else "未知")})
         if found and len(found) < len(paras) * 0.5:
-            warns.append({"level": "warn", "owner": "text",
+            warns.append({"level": "warning", "owner": "text",
                           "message": "段落锚点只有 %d 个（工具给了 %d 段）—— 合并得有点狠，确认没有漏讲" % (len(found), len(paras))})
         warns += _anchor_drift_warns(cfg, paths, paras, md)
     return errors, warns

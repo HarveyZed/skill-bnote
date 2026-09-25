@@ -134,15 +134,29 @@ def migrate(paths, meta: dict, dry: bool = False) -> dict:
 
 # ------------------------------------------------------------------ 结构校验（只校验结构）
 
-def _err(msg: str, owner: str = "manifest", chapter: str | None = None,
-         file: str | None = None, fix: str | None = None) -> dict:
+def _item(level: str, msg: str, owner: str = "manifest", chapter: str | None = None,
+          file: str | None = None, fix: str | None = None) -> dict:
     """一条结构问题 + 归属（owner 决定谁来修）：
        chapter:<id> —— 该章写作 agent（内容/结构填错）
        manifest     —— 编排者（章节划分、时间范围、keypoints 汇总等全局结构）
        pipeline     —— 工具/流水线（切片、bundle、remap 等产出物不一致），需要改代码或人工决策
+
+    `level` 只有两个取值：**error**（进 `errors`，拦住覆盖成品、进派修队列）与
+    **warning**（进 `warnings`，只提醒、不拦流程）。落进哪个数组由调用方决定，
+    两边必须一致：**不要用 _err() 生成警告**（0.9.1 之前就是这样，导致警告带 error 级）。
     """
-    return {"level": "error", "owner": owner, "chapter": chapter, "file": file,
+    return {"level": level, "owner": owner, "chapter": chapter, "file": file,
             "message": msg, "fix_hint": fix or ""}
+
+
+def _err(msg: str, owner: str = "manifest", chapter: str | None = None,
+         file: str | None = None, fix: str | None = None) -> dict:
+    return _item("error", msg, owner, chapter, file, fix)
+
+
+def _warn(msg: str, owner: str = "manifest", chapter: str | None = None,
+          file: str | None = None, fix: str | None = None) -> dict:
+    return _item("warning", msg, owner, chapter, file, fix)
 
 
 def validate(manifest: dict | None, paths, meta: dict, transcript: dict | None,
@@ -150,8 +164,6 @@ def validate(manifest: dict | None, paths, meta: dict, transcript: dict | None,
     errors, warns = [], []
     tol = int(((cfg or {}).get("manifest") or {}).get("time_tolerance_sec", 1))
 
-    def W(msg, owner="manifest", chapter=None, file=None, fix=None):
-        warns.append(_err(msg, owner, chapter, file, fix))
     if not manifest:
         return [_err("缺少 chapters/manifest.json（结构唯一来源）", "manifest",
                      fix="跑 bnote merge 会自动从 v3 章节迁移，或由编排者补齐结构文件")], warns
@@ -267,8 +279,8 @@ def validate(manifest: dict | None, paths, meta: dict, transcript: dict | None,
                                fix="编排者补时段或调整章界（往往意味着某章漏写）"))
     missing = sorted(set(range(1, slide_count + 1)) - used_slides)
     if missing:
-        warns.append(_err("有 %d 张 slide 未被正文引用：%s" % (len(missing), missing), "chapter:?",
-                          fix="确认是否为过渡帧；若是内容页，请对应章补引用"))
+        warns.append(_warn("有 %d 张 slide 未被正文引用：%s" % (len(missing), missing), "chapter:?",
+                           fix="确认是否为过渡帧；若是内容页，请对应章补引用"))
     return errors, warns
 
 
