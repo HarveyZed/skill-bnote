@@ -54,22 +54,6 @@ def find_ffmpeg(cfg: dict) -> str:
     return _link_as_ffmpeg(imageio_ffmpeg.get_ffmpeg_exe(), cfg)
 
 
-def find_ffprobe(cfg: dict) -> str:
-    custom = cfg["tools"].get("ffprobe")
-    if custom:
-        return custom
-    found = shutil.which("ffprobe")
-    if found:
-        return found
-    ff = find_ffmpeg(cfg)
-    guess = ff.replace("ffmpeg", "ffprobe")
-    if shutil.which(guess) or guess != ff:
-        import os
-        if os.path.exists(guess):
-            return guess
-    raise RuntimeError("找不到 ffprobe（imageio-ffmpeg 只带 ffmpeg，无 ffprobe；可改用 web-interface API 取元信息）")
-
-
 def yt_dlp_python(cfg: dict) -> str:
     """返回可执行的 python 解释器（用于 -m yt_dlp）"""
     custom = cfg["tools"].get("yt_dlp")

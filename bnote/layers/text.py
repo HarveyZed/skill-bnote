@@ -104,17 +104,6 @@ def build_paragraphs(cfg, paths) -> list:
     return out
 
 
-def _anchor_marks(cfg, paragraphs: list) -> list:
-    every = float(cfg.get("text", {}).get("anchor_every_sec", 0) or 0)
-    if every <= 0:
-        return []
-    marks, nxt = [], every
-    for p in paragraphs:
-        if p["t_start"] >= nxt:
-            marks.append(p)
-            nxt = p["t_start"] + every
-    return marks
-
 
 def build_chunks(cfg, paths, paragraphs: list, meta: dict) -> list:
     """渐进式披露：把段落切成 N 块，每块一个素材文件（writer 一块块读）。"""
@@ -390,7 +379,7 @@ def write_validation(paths, errors: list, warns: list) -> Path:
 
 
 def build(cfg, paths, meta: dict, transcript: dict) -> dict:
-    paths.ensure()
+    paths.out.mkdir(parents=True, exist_ok=True)   # transcript.md 落在 out/，其余由各自的写入者建
     write_transcript_md(paths, transcript)
     paras = build_paragraphs(cfg, paths)
     chunks = build_chunks(cfg, paths, paras, meta)

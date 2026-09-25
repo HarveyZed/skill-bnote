@@ -203,7 +203,7 @@ def build(cfg: dict, paths, meta: dict, transcript: dict | None = None, slides: 
         "stats": {"latin_tokens": latin_chars, "cjk_chars": cjk_chars,
                   "slide_count": slides_n, "duration": dur},
     }
-    paths.ensure()
+    paths.cache.mkdir(parents=True, exist_ok=True)   # 只建自己要写的目录
     (paths.cache / "profile.json").write_text(json.dumps(profile, ensure_ascii=False, indent=2), encoding="utf-8")
     print("[profile] 领域=%s ｜ 观测术语 %d 个 ｜ 中英混排=%s 代码=%s 公式=%s"
           % (", ".join(predicted[:4]) or "-", len(observed), bilingual, has_code, has_formula))

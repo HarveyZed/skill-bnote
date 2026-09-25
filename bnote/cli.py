@@ -74,6 +74,10 @@ def _overrides(args) -> dict:
 
 # 这些命令自己会打完整横幅（含解析后的路径），_ctx 不再重复打压缩行
 _BANNER_CMDS = ("run", "fetch", "slides", "meta")
+# 会产出整棵 cache 树（media/subtitle/frames/ocr）的取数命令：只有它们需要一次性建好目录。
+# 其余命令各自的写入者已经会建自己要写的目录（write_json / prompt / manifest / xref / export …），
+# 不必替它们铺一整棵树——否则只读命令会在数据根里留下空目录，让「这集取过数没有」与 clean 的报数失真。
+_TREE_CMDS = ("run", "fetch", "slides", "stream")
 # 这些命令在"该集还没取数"时也必须能跑（取数本身，以及清理）
 _NO_DATA_OK = ("run", "fetch", "slides", "meta", "stream", "clean")
 
@@ -99,7 +103,7 @@ def _ctx(args):
             "  → 检查调用时的 cwd，或用 BNOTE_ROOT=<数据根> 指定；还没有取数就先跑：\n"
             "     %s" % (vid, cmd, p["skill_root"], p["root"], remedy))
     paths = WorkPaths(cfg, vid)
-    if cmd != "clean":          # clean 不该在建出目录之后再告诉你要删什么
+    if cmd in _TREE_CMDS:       # 见 _TREE_CMDS：只有取数命令建整棵目录树
         paths = paths.ensure()
     if cmd not in _BANNER_CMDS:
         info = describe(cfg)

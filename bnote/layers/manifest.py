@@ -284,12 +284,6 @@ def validate(manifest: dict | None, paths, meta: dict, transcript: dict | None,
     return errors, warns
 
 
-def brief_rows(manifest: dict) -> list[dict]:
-    """给 note 合成用的扁平行"""
-    return [{"id": c["id"], "title": c["title"], "range": c["range"],
-             "keypoints": c.get("keypoints") or [], "questions": c.get("questions") or []}
-            for c in manifest.get("chapters", [])]
-
 # ---------------------------------------------------------------- v0.7.0 新增
 PATCH_KEYS = ("keypoints", "questions", "corrections", "review_flags", "coverage_notes",
               "stage_merges", "title")

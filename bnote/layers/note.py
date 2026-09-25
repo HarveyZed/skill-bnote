@@ -28,37 +28,6 @@ def _chapter_files(paths):
     return sorted(paths.chapters().glob("0*.md"))
 
 
-def _front_of(text: str) -> dict:
-    """读取 front matter（支持 key: value / key: [a, b] / 缩进 - 列表）"""
-    out = {}
-    if not text.startswith("---"):
-        return out
-    try:
-        _, fm, _ = text.split("---", 2)
-    except ValueError:
-        return out
-    cur = None
-    for line in fm.splitlines():
-        if not line.strip():
-            continue
-        if re.match(r"^\s+-\s+", line) and cur:
-            out.setdefault(cur, []).append(line.split("-", 1)[1].strip().strip('"'))
-            continue
-        if ":" not in line:
-            continue
-        k, v = line.split(":", 1)
-        k, v = k.strip(), v.strip()
-        if not v:
-            cur = k
-            out.setdefault(k, [])
-            continue
-        cur = None
-        if v.startswith("[") and v.endswith("]"):
-            out[k] = [x.strip().strip('"') for x in v[1:-1].split(",") if x.strip()]
-        else:
-            out[k] = v.strip('"').strip("'")
-    return out
-
 
 def _hms(sec) -> str:
     sec = int(sec or 0)

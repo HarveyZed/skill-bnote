@@ -46,7 +46,7 @@ def load_index(paths) -> list[dict] | None:
 
 
 def extract(cfg: dict, paths, media_path: Path, force: bool = False) -> list[dict]:
-    paths.ensure()
+    paths.frames.mkdir(parents=True, exist_ok=True)   # 只建自己要写的目录
     old = glob.glob(str(paths.frames / "*.jpg"))
     if old and not force:
         frames = load_index(paths)

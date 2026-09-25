@@ -28,7 +28,7 @@ def find_media(paths) -> Path | None:
 
 def download(cfg: dict, paths, meta: dict, cookie: str = "", netscape: str | None = None,
              force: bool = False) -> Path:
-    paths.ensure()
+    paths.media.mkdir(parents=True, exist_ok=True)   # 只建自己要写的目录
     if not force:
         existing = find_media(paths)
         if existing:

@@ -71,11 +71,3 @@ def resolve(cfg: dict) -> tuple[str, str | None]:
         pairs.setdefault("SESSDATA", sessdata)
     header = "; ".join("%s=%s" % (k, v) for k, v in pairs.items() if v)
     return header, netscape
-
-
-def have_login(cfg: dict) -> bool:
-    try:
-        header, _ = resolve(cfg)
-        return bool(header)
-    except Exception:
-        return False
