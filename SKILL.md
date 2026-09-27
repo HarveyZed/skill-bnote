@@ -103,7 +103,7 @@ scripts/bnote run <URL> --page N --sections 00:00:00-00:05:00   # 先用 5 分�
 run 取数 ──▶ scaffold 分章 ──▶ brief --stage chapter ──▶ writers 并行写章
                  ▲ 门禁①                ▲ 门禁②                  │
                  └ 必须给 _groups.json    └ 术语表必须已确认        ▼
-                                                              collect 汇总补丁
+                     （brief 在派单时刻记下切片指纹）        collect 汇总补丁 + 搬指纹
                                                                      │
                                         retime（工具生成时间行）◀────┘
                                                                      │
@@ -124,19 +124,25 @@ fetch      只取数（meta + media + subtitle），不做抽帧/切片
 stream     信息流/口播类（无幻灯片）：取音频+字幕 → 分段分块 → 整理稿（--assemble 拼接+校验）
 meta       只取元信息（BV/p/cid/标题/时长/**简介/标签/分区/UP 置顶评论**；旧缓存会自动补取）
 slides     只做抽帧 + 切片 + OCR（改了切片参数后重跑它，再跑 bundle）
-bundle     只重建交付物（slides/ + slides.json + transcript.md），并快照旧讲义
+bundle     只重建交付物（slides/ + slides.json + transcript.md），并快照旧讲义；slides.json 顶层写这一版切片的指纹
+           `slideset`（每页含 frame/chosen_t/sha256）—— 摘要只依赖 out/，cache 删掉也能复算
 scaffold   生成章节结构（manifest + _plan）；分章是语义判断：给 --groups，或显式 --auto 接受一页一章（--no-leading-merge：封面不与目录合并）
-brief      渲染派单 prompt：--stage chapter|note|fix|review
+brief      渲染派单 prompt：--stage chapter|note|fix|review；chapter 阶段同时把**派单时刻**的切片指纹记进 _meta/slideset_dispatch.json（只记本次实际派发的章）
 glossary   查看/修改/确认术语表（未确认时 brief --stage chapter 会拒绝派发）
 patch      打印某章的补丁文件路径与 schema（写手写这里，不直接改 manifest）
-collect    把 _meta/patch/<章号>.json 汇总进 manifest（多写手并发时不丢更新）
+collect    把 _meta/patch/<章号>.json 汇总进 manifest（多写手并发时不丢更新）；并把派单台账里的切片指纹
+           搬进**每章**的 slideset_id 与顶层汇总（没有补丁也会写盘）
 retime     按 slides.json 幂等重写小节时间行（时间由工具生成，写手不写时间）
-check      结构校验；--chapter 06,07 限定作用域（写手自检用）
+check      结构校验；--chapter 06,07 限定作用域（写手自检用）。含切片身份：顶层指纹不符 = 整集错版（error）、
+           某章指纹不符 = 该章需重派写手（error）、逐页图片 sha256 不符 = 图被替换（error）、
+           缺指纹的存量产物与 remap 留痕 = warn
 merge      合并讲义（结构校验通过才落盘）+ 刷新 note_brief
 note       校验 note.md + 导出钩子
 export     导出可粘贴进 B 站笔记的富文本（--format bili-note；--from lecture|note；CF_HTML + Windows 装载脚本；不调平台写接口）
 xref       把多集的钩子与结构汇成跨讲综合工作表（--from-page A --to-page B；输出到 <数据根>/out/_xref/；缺集会拒绝）
-remap      重切片后按时间重叠同步正文与 manifest 的图号（幂等；--from <旧 slides.json> 或 --force-map 强制重写；bundle 会自动快照上一版）
+remap      重切片后按时间重叠同步正文与 manifest 的图号（幂等；--from <旧 slides.json> 或 --force-map 强制重写；bundle 会自动快照上一版）。
+           同时把 manifest 的指纹换成**当前版**并留痕 `slideset_remap`：它只搬页号、**不改正文文字**，
+           所以 check 对留痕报一条 warn（图注需复核）；重派写手后 collect 会自动清掉该标记
 dispatch   登记 owner → 该章的原写手（修复时据此发回原作者）
 fix        修复队列：不带参数打印待修清单与投递对象；--done <owner> 标记已修
 review     摄入审阅发现（_meta/review_<n>.json）→ 归一 owner → 并入派修流
@@ -208,10 +214,12 @@ scripts/bnote fix      <URL> --page N --done chapter:01     # 子 agent 回报�
 
 - **结构**（工具强校验，失败不覆盖成品）：manifest schema、章界连续与覆盖、slide 归属、
   **正文小节时间行（格式统一 / 单调 / 不重叠 / 不越章界）**、多图小节的每图时间戳、图存在、
-  `corrections` 三字段、`stage_merges` 一致性、note 节点格式与 20% 预算；校验口径详见 `references/schema/body-contract.md`；
+  `corrections` 三字段、`stage_merges` 一致性、**切片身份（顶层/章级指纹 + 逐页图片 sha256）**、
+  note 节点格式与 20% 预算；校验口径详见 `references/schema/body-contract.md`；
 - **内容**（写进写作契约，工具不 grep）：覆盖每个知识点、图注必须自己**打开图看**过再写（读图工具：DSH 里是 `read_image`，其它 harness 用等价工具；OCR 会漏字）、
   分类落表格、小结/思考、不编造；术语白名单与排版规则由**内容画像**注入；
-- **派生数据由工具生成**：时间行（`retime`）、节点索引（`note`）、钩子（`note`）；
+- **派生数据由工具生成**：时间行（`retime`）、节点索引（`note`）、钩子（`note`）、**切片指纹**（`slideset`：bundle 产出、
+  brief 在派单时刻记录、collect 搬进 manifest、check 比对）—— 写手不写也不改；
 - 工程性信息（听写校正、存疑、覆盖说明）进 manifest 字段；**唯一例外**：依据只能靠语境推断出来的更正（`corrections` 的 `basis=context`）与无法归位的存疑（`uncertainties`），要在**正文相关段落之后**就地标注 `> **【校对】** 原文 → 更正（或存疑点）→ 依据`——那是读者判断这段可不可信的凭据，不是工程碎片。位置在段落之后、自成一段，不插进句子中间；「校对」两字写全。
 - **视频页元信息**（简介 / 标签 / 分区 / **UP 主置顶评论**）在取数时落进 `<数据根>/cache/<vid>/meta.json`，并注入派单 prompt（章节写手、笔记写手、整理稿写手都能看到，当背景）；人也从 `index.md` 看到它。
   它们**不是课程内容**：可以用来判断主题、术语写法、是否属于某个系列，也能据此找到作者给的资料链接，但不许写进讲义/笔记正文（讲师没说的不算课程讲的）。

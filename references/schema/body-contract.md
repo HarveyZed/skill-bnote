@@ -36,6 +36,11 @@
 | 推断类校正(basis=context) / 存疑(uncertainties) 没在正文就地标注 | error | chapter:<id> |
 | stage_merges 的 slides/kept 与本章不符 | error | chapter:<id> |
 | manifest.slide_count 与 slides.json 页数不一致 | error | pipeline |
+| manifest.slideset_id 与当前 slides.json 的切片指纹不一致（整集错版） | error | pipeline |
+| 某章的 slideset_id 与当前切片不一致（该章需重派写手） | error | pipeline |
+| slides/NNNN.jpg 实际 sha256 与 slides.json 记录不符（图被替换/拷贝中断） | error | pipeline |
+| 缺切片指纹：manifest / slides.json 早于本功能，或某几章没被派单覆盖 | warn | pipeline |
+| 存在 slideset_remap 留痕：页号已同步但正文与图注未重写 | warn | pipeline |
 | 章界不连续、末章未覆盖片尾、字幕有段落无归属 | error | manifest |
 | keypoints < 下限 / 缺 questions | error | chapter:<id> |
 | 有 slide 未被任何章引用 | warn | chapter:? |

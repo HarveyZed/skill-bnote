@@ -111,7 +111,7 @@ def current_id(out_dir: Path) -> str | None:
 def recompute_from_out(out_dir: Path, doc: dict | None = None) -> dict | None:
     """check 用：对 out/<vid>/slides/NNNN.jpg 现算 sha256 后复算 id，并给出逐页差异细节。
 
-    返回 None = 这份产物没有可复算的指纹（旧 slides.json / 空页）。
+    返回 None = 这份产物没有可复算的东西（没有 slides.json / 没有页）。
     返回 {recorded_id, id, pages:[{id,recorded,actual,exists}], missing, mismatch}
     —— pages 里的 (记录值, 实际值, 文件是否存在) 是 check 定位「第几页」的依据。
     """
@@ -119,7 +119,7 @@ def recompute_from_out(out_dir: Path, doc: dict | None = None) -> dict | None:
     doc = doc if doc is not None else read_out_slides(out_dir)
     ss = slideset_of(doc)
     slides = (doc or {}).get("slides") or []
-    if not ss.get("id") or not slides:
+    if not slides:
         return None
     slides_dir = out_dir / "slides"
     pages = []

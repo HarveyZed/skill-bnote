@@ -176,6 +176,70 @@ def _warn(msg: str, owner: str = "manifest", chapter: str | None = None,
     return _item("warning", msg, owner, chapter, file, fix)
 
 
+def _short_sid(s: str) -> str:
+    """报错文案里的指纹只显示前 19 个字符：完整值在 manifest / slides.json 里。"""
+    s = str(s or "")
+    return (s[:19] + "…") if len(s) > 20 else (s or "-")
+
+
+def _check_slideset(paths, manifest: dict, chapters: list, errors: list, warns: list) -> None:
+    """0b 切片身份：manifest 记的是「写手当时看到的那版图」，与当前 slides.json 比对。
+
+    四类结果（输出纪律照抄既有约定：只有 id 不等与逐页 sha 不一致进 errors，其余走 _warn；
+    owner 一律 pipeline —— 这是工具/流水线产出物不一致，要人决策，不是写手的锅）：
+      ① 顶层（整集口径）id 不等 → error「整集错版」；章级 id 不等 → error「该章需重派写手」；
+      ② 逐页 sha256 自一致失败（图被替换/拷贝半途中断）→ error，**无条件跑**
+         （不挂在 ① 的 else 上，否则 manifest 一过期就不查篡改）；
+      ③ 缺字段（早于本功能的存量产物）→ **warn**，不 error、不拦 merge（那时写手看的是哪一版
+         图已无从证明，硬报 error 会让所有存量产物永久红灯）；
+      ④ 有 slideset_remap 留痕 → warn（页号已同步，正文文字与图注未重写）。
+    """
+    doc = slideset_layer.read_out_slides(paths.out)
+    cur = str(slideset_layer.slideset_of(doc).get("id") or "")
+    top = str(manifest.get("slideset_id") or "")
+    pairs = [(str(c.get("id")), str(c.get("slideset_id") or "")) for c in chapters or []]
+    if doc is None:
+        warns.append(_warn("缺 out/<vid>/slides.json，无法校验切片指纹（重跑 bnote bundle 恢复）", "pipeline"))
+    elif not cur:
+        # 当前版没有指纹（早于本功能的 slides.json）→ 判不了等，一律 warn：硬按"不等"处理成 error
+        # 会让所有存量产物永久红灯，而那时写手看的是哪一版图已无从证明。
+        warns.append(_warn("out/<vid>/slides.json 缺切片指纹（早于本功能的存量产物%s）：无法判断讲义与当前切片"
+                           "是否同版；重跑 bnote bundle 并重派写手即可获得保护（存量产物不回填）"
+                           % ("，manifest 里记着 %s" % _short_sid(top) if top else ""), "pipeline",
+                           fix="bnote bundle → brief --stage chapter → collect"))
+    elif not top:
+        warns.append(_warn("manifest 缺 slideset_id（早于本功能）；先 bnote collect 补上", "pipeline"))
+    else:
+        if top != cur:
+            errors.append(_err("整集错版：manifest 记录的切片指纹 %s 与当前 slides.json 的 %s 不一致"
+                               "（讲义写的是另一版切片）" % (_short_sid(top), _short_sid(cur)),
+                               "pipeline",
+                               fix="重派写手（brief --stage chapter → 重写受影响章），"
+                                   "或用 bnote remap 同步页号后再复核图注"))
+        for cid, sid in pairs:
+            if sid and sid != cur:
+                errors.append(_err("该章需重派写手：章 %s 写在切片 %s 上，当前切片是 %s"
+                                   % (cid, _short_sid(sid), _short_sid(cur)), "pipeline", cid,
+                                   fix="brief --scope chapter:%s → 重写该章" % cid))
+        missing = [cid for cid, sid in pairs if not sid]
+        if missing:
+            warns.append(_warn("这些章缺 slideset_id（早期派单未覆盖）：%s；无法判断是否同版"
+                               % "、".join(missing), "pipeline"))
+    for p in (slideset_layer.recompute_from_out(paths.out, doc) or {}).get("pages") or []:
+        if p.get("recorded") is None:
+            continue                     # 存量产物没有记录值，无从比对（上面已 warn 一次）
+        if not p["exists"]:
+            errors.append(_err("slides/%04d.jpg 不存在，但 slides.json 记录了它的 sha256（拷贝不完整或图被删）" % p["id"], "pipeline"))
+        elif p["actual"] != p["recorded"]:
+            errors.append(_err("slides/%04d.jpg 实际 sha256 与 slides.json 记录不符（图被替换/拷贝半途中断）" % p["id"], "pipeline"))
+    rm = manifest.get("slideset_remap")
+    if isinstance(rm, dict):
+        warns.append(_warn("该讲义经 remap 迁移过页号（%s → %s，%s）：页号已同步，但正文文字与图注未重写，需复核"
+                           % (_short_sid(rm.get("from")), _short_sid(rm.get("to")), rm.get("at") or "-"),
+                           "pipeline",
+                           fix="抽样看图复核图注，或 brief --stage review；重派写手后 collect 会自动清掉这个标记"))
+
+
 def validate(manifest: dict | None, paths, meta: dict, transcript: dict | None,
              cfg: dict | None = None):
     errors, warns = [], []
@@ -207,6 +271,7 @@ def validate(manifest: dict | None, paths, meta: dict, transcript: dict | None,
         errors.append(_err("manifest.slide_count=%d 与 slides.json 的 %d 页不一致（多半是重切片后未刷新结构）"
                            % (slide_count, real_slides), "pipeline",
                            fix="跑 bnote remap --from <旧 slides.json> 同步引用，再重跑 bnote scaffold/bundle 刷新 slide_count"))
+    _check_slideset(paths, manifest, chapters, errors, warns)
     kp_min = int((cfg or {}).get("manifest", {}).get("keypoints_min", 2))
     duration = int(meta.get("duration") or 0)
     prev_end = None

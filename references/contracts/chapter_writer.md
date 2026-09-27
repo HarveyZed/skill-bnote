@@ -5,7 +5,7 @@
 ## 你要读的东西
 
 1. `transcript.md` —— 官方 AI 字幕（唯一内容底稿，带 [HH:MM:SS]）；
-2. `slides.json` + `slides/NNNN.jpg` —— 本视频切出的 {{SLIDE_COUNT}} 页幻灯片；
+2. `slides.json` + `slides/NNNN.jpg` —— 本视频切出的 {{SLIDE_COUNT}} 页幻灯片；顶层 `slideset` 是**工具的产物**（这一版切片的身份指纹），你**不要写也不要改**它；
 3. `chapters/manifest.json` —— 结构文件（你要往里填自己那几章的字段）；
 4. `chapters/_plan.md` —— 章节划分与本视频的特殊约定。
 

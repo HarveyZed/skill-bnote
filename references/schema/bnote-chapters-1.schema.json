@@ -22,6 +22,41 @@
     "scaffolded_at": {
       "type": "string"
     },
+    "slideset_id": {
+      "type": "string",
+      "description": "派单时刻那版切片的身份摘要（bnote-slideset/1，形如 sha256:...）；与当前 out/<vid>/slides.json 的 slideset.id 不一致即整集错版（check 报 error）"
+    },
+    "slideset_algo": {
+      "type": "string",
+      "description": "指纹算法版本（当前 bnote-slideset/1）；换算法时旧摘要不会被误认为同版"
+    },
+    "slideset_at": {
+      "type": "string",
+      "description": "brief --stage chapter 记录该指纹的时刻（YYYY-MM-DD HH:MM:SS）"
+    },
+    "slideset_count": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "记录指纹时的页数（与 slide_count 同源，便于一眼对照）"
+    },
+    "slideset_remap": {
+      "type": "object",
+      "description": "bnote remap 的留痕：把旧版页号映射到当前版后写入 from/to/at；check 对它的存在报 warn（页号已同步、图注未重写）",
+      "properties": {
+        "from": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "to": {
+          "type": "string"
+        },
+        "at": {
+          "type": "string"
+        }
+      }
+    },
     "chapters": {
       "type": "array",
       "minItems": 1,
@@ -83,6 +118,10 @@
             "type": "string"
           },
           "minItems": 1
+        },
+        "slideset_id": {
+          "type": "string",
+          "description": "该章被派单时那版切片的指纹（由 brief/collect 写；写手不要动它）；与当前切片不一致即「该章需重派写手」"
         },
         "corrections": {
           "type": "array",
