@@ -50,8 +50,13 @@ SCHEMA = {
                     "required": ["wrong", "right", "evidence"],
                     "properties": {"wrong": {"type": "string"},
                                    "right": {"type": "string"},
-                                   "evidence": {"type": "string"}},
+                                   "evidence": {"type": "string"},
+                                   "basis": {"type": "string",
+                                             "enum": ["page", "meta", "context"],
+                                             "description": "依据类型：page=页面用字 / meta=人写元信息 / context=上下文推断；context 必须在正文就地标注"}},
                 }},
+                "uncertainties": {"type": "array", "items": {"type": "string"},
+                                  "description": "给读者看的存疑（无法归位、语义不明等），每条都要在正文就地标注"},
                 "review_flags": {"type": "array", "items": {"type": "string"}},
                 "coverage_notes": {"type": "string"},
                 "stage_merges": {"type": "array", "items": {
@@ -78,6 +83,21 @@ CONTRACT = """# 正文与小节的格式契约（工具校验，写手必须照�
 * 图片用相对路径 ../slides/NNNN.jpg（**目录内部结构冻结**，故相对引用永远有效）；
 * ### 小结、### 思考 用小节内的三级标题。
 
+## 就地标注（给读者看的推断与存疑）
+
+凡是**推断出来的更正**（manifest 的 corrections 里 basis=context）与**无法归位的存疑**
+（manifest 的 uncertainties），都要在**相关段落之后**补一个引用块，写法固定为：
+
+```markdown
+> **【校对】** 字幕作「CARL」，页面无此词，按语境推断为 KL 散度（00:11:16）。
+```
+
+* 位置：**紧跟相关那一段之后**，自成一段；**不要写进句子中间**、不要打断正文阅读；
+* 内容写全三样：原文（错成什么）→ 更正或存疑点 → 依据（slide 编号 / 元信息 / 语境）；
+* 「校对」两字**写全、不要简写**（工具按 `**【校对】**` 这个标记计数）；
+* 有页面用字或人写元信息作依据的普通更正**不必**标注——照旧写干净正文、记进 manifest 即可；
+* 工程性碎片（看图比对过程、切片判断等）仍只进 manifest，**不进正文**。
+
 ## 校验口径（bnote check）
 
 | 项 | 级别 | owner |
@@ -87,6 +107,7 @@ CONTRACT = """# 正文与小节的格式契约（工具校验，写手必须照�
 | 引用不存在或不属于本章的 slide | error | chapter:<id> / pipeline |
 | 多图小节缺每图时间行 | error | chapter:<id> |
 | corrections 缺 wrong/right/evidence | error | chapter:<id> |
+| 推断类校正(basis=context) / 存疑(uncertainties) 没在正文就地标注 | error | chapter:<id> |
 | stage_merges 的 slides/kept 与本章不符 | error | chapter:<id> |
 | manifest.slide_count 与 slides.json 页数不一致 | error | pipeline |
 | 章界不连续、末章未覆盖片尾、字幕有段落无归属 | error | manifest |

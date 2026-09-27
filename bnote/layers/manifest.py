@@ -36,6 +36,8 @@ TS_RE = re.compile(r"^\d{1,2}:\d{2}:\d{2}$")
 FM_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.S)
 META_BEGIN = "<!-- meta:begin -->"
 META_END = "<!-- meta:end -->"
+# 就地标注：给"读者需要看到的推断与存疑"用的固定标记（引用块，紧跟相关段落之后，不打断阅读）
+ANNOT_MARK = "**【校对】**"
 IMG_RE = re.compile(r"!\[([^\]]*)\]\((?:\.\./)?slides/(\d{4})\.jpg\)")
 
 
@@ -149,6 +151,19 @@ def _item(level: str, msg: str, owner: str = "manifest", chapter: str | None = N
             "message": msg, "fix_hint": fix or ""}
 
 
+def _reader_flags(ch: dict) -> tuple[int, int]:
+    """(需要读者看到的条数, 其中推断类校正的条数)。
+
+    需要读者看到的两类：① corrections 里 basis=context（靠在语境里推断得出的更正）
+    ② uncertainties（无法归位 / 语义不明等存疑）。这两类必须在正文就地标注——
+    它们不是"工程碎片"（工程碎片仍留在 manifest），而是读者判断这段文字可不可信的依据。
+    """
+    cs = [c for c in (ch.get("corrections") or []) if isinstance(c, dict)]
+    ctx = sum(1 for c in cs if str(c.get("basis") or "").lower() == "context")
+    doubts = len(ch.get("uncertainties") or [])
+    return ctx + doubts, ctx
+
+
 def _err(msg: str, owner: str = "manifest", chapter: str | None = None,
          file: str | None = None, fix: str | None = None) -> dict:
     return _item("error", msg, owner, chapter, file, fix)
@@ -250,6 +265,14 @@ def validate(manifest: dict | None, paths, meta: dict, transcript: dict | None,
                 if not (paths.out / "slides" / ("%04d.jpg" % n)).exists():
                     errors.append(_err("引用了不存在的图 slides/%04d.jpg" % n, "pipeline", cid,
                                        fix="多半是重切片后未跑 bnote remap，或 bundle 未刷新 slides/"))
+            need, ctx = _reader_flags(ch)
+            have = text.count(ANNOT_MARK)
+            if need > have:
+                errors.append(_err(
+                    "需要读者看到的推断/存疑有 %d 条（其中推断类校正 %d 条），正文里只有 %d 处就地标注"
+                    % (need, ctx, have), "chapter:%s" % cid, cid, str(ch.get("body")),
+                    fix="该章写作 agent 在涉及段落之后补引用块 %s：写明原文 → 更正（或存疑点）→ 依据；"
+                        "不要写进句子中间，也不要打断正文阅读" % ANNOT_MARK))
 
         kps = ch.get("keypoints") or []
         if len(kps) < kp_min:
@@ -285,7 +308,7 @@ def validate(manifest: dict | None, paths, meta: dict, transcript: dict | None,
 
 
 # ---------------------------------------------------------------- v0.7.0 新增
-PATCH_KEYS = ("keypoints", "questions", "corrections", "review_flags", "coverage_notes",
+PATCH_KEYS = ("keypoints", "questions", "corrections", "uncertainties", "review_flags", "coverage_notes",
               "stage_merges", "title")
 
 

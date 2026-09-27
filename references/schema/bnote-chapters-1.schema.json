@@ -102,9 +102,25 @@
               },
               "evidence": {
                 "type": "string"
+              },
+              "basis": {
+                "type": "string",
+                "enum": [
+                  "page",
+                  "meta",
+                  "context"
+                ],
+                "description": "依据类型：page=页面用字 / meta=人写元信息 / context=上下文推断；context 必须在正文就地标注"
               }
             }
           }
+        },
+        "uncertainties": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "给读者看的存疑（无法归位、语义不明等），每条都要在正文就地标注"
         },
         "review_flags": {
           "type": "array",

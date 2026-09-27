@@ -3,7 +3,7 @@ name: bnote
 description: 把 B 站视频转成可读的 Markdown 学习资料——逐节讲义 lecture.md（按原时间轴、配幻灯片图）与单课笔记 note.md。当用户给出 B 站链接（BV 号或 URL，可能带分P）并要求以下任一项时使用：生成讲义或课程笔记、把视频变成可读文字、抽取 PPT 幻灯片页面、提取字幕、整理口播/播客类视频的字幕。不适用：只想要视频或音频文件（用 yt-dlp）、只想要一段简短摘要（本 skill 产出的是完整逐节资料）。
 license: MIT
 metadata:
-  version: 0.9.1
+  version: 0.10.0
   entrypoint: "scripts/bnote"
   requires: "Python>=3.10（解释器用 config/local.toml 的 [tools] python 或 BN_PYTHON 配置）；ffmpeg 由 imageio-ffmpeg 静态包提供；B 站登录态推荐（否则字幕退化为本地 ASR）"
   layout: "SKILL.md + references/（契约与 schema）+ scripts/（入口与工具）+ config/ + 代码包；运行期数据在 skill 之外的数据根"
@@ -212,7 +212,7 @@ scripts/bnote fix      <URL> --page N --done chapter:01     # 子 agent 回报�
 - **内容**（写进写作契约，工具不 grep）：覆盖每个知识点、图注必须自己**打开图看**过再写（读图工具：DSH 里是 `read_image`，其它 harness 用等价工具；OCR 会漏字）、
   分类落表格、小结/思考、不编造；术语白名单与排版规则由**内容画像**注入；
 - **派生数据由工具生成**：时间行（`retime`）、节点索引（`note`）、钩子（`note`）；
-- 工程性信息（听写校正、存疑、覆盖说明）一律进 manifest 字段 —— 正文里没有位置可写；
+- 工程性信息（听写校正、存疑、覆盖说明）进 manifest 字段；**唯一例外**：依据只能靠语境推断出来的更正（`corrections` 的 `basis=context`）与无法归位的存疑（`uncertainties`），要在**正文相关段落之后**就地标注 `> **【校对】** 原文 → 更正（或存疑点）→ 依据`——那是读者判断这段可不可信的凭据，不是工程碎片。位置在段落之后、自成一段，不插进句子中间；「校对」两字写全。
 - **视频页元信息**（简介 / 标签 / 分区 / **UP 主置顶评论**）在取数时落进 `<数据根>/cache/<vid>/meta.json`，并注入派单 prompt（章节写手、笔记写手、整理稿写手都能看到，当背景）；人也从 `index.md` 看到它。
   它们**不是课程内容**：可以用来判断主题、术语写法、是否属于某个系列，也能据此找到作者给的资料链接，但不许写进讲义/笔记正文（讲师没说的不算课程讲的）。
   置顶评论与简介**同一权重**（作者常把资料链接、勘误、答疑补充在这里——改简介等于重新发布视频）；工具**只取作者置顶的那一条**，不做评论区批量采集，开关 `meta.top_comment`。
