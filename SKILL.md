@@ -126,6 +126,10 @@ meta       只取元信息（BV/p/cid/标题/时长/**简介/标签/分区/UP �
 slides     只做抽帧 + 切片 + OCR（改了切片参数后重跑它，再跑 bundle）
 bundle     只重建交付物（slides/ + slides.json + transcript.md），并快照旧讲义；slides.json 顶层写这一版切片的指纹
            `slideset`（每页含 frame/chosen_t/sha256）—— 摘要只依赖 out/，cache 删掉也能复算
+measure    零 token 媒体验测：**一次解码**量出逐秒运动 + 切点/冻结段/静音段 → cache/<vid>/measure.json
+           （只读媒体文件，另可选读 cache/frames/index.json 给"抽了几帧、可能漏什么"的上界；
+           进度/帧数/最大间隔都写进产物的 coverage；**未按遮罩算**（masked=false）：烧录字幕与标注工具条
+           每秒在变，会污染 motion 与 freezes，M3 之后改读 overlay.json；**不接进 run/slides**，只在显式调用时跑）
 scaffold   生成章节结构（manifest + _plan）；分章是语义判断：给 --groups，或显式 --auto 接受一页一章（--no-leading-merge：封面不与目录合并）
 brief      渲染派单 prompt：--stage chapter|note|fix|review；chapter 阶段同时把**派单时刻**的切片指纹记进 _meta/slideset_dispatch.json（只记本次实际派发的章）
 glossary   查看/修改/确认术语表（未确认时 brief --stage chapter 会拒绝派发）
