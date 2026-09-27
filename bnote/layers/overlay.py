@@ -43,6 +43,14 @@ schema / vid / algo / source / params / regions / applicability / stats）。
    文字与色板帧帧相同（留得下），幻灯片内容逐页重画（被交掉）；组里只有 1 帧就说明这东西
    只出现过一次，按幻灯片内容处理。
 
+M4 新增判据 3：color_stroke（手写笔迹）
+----------------------------------------
+彩色细笔画（红/橙笔，hue 窗口见 params 的 handwriting_hue_*；蓝窗默认关）识别为
+kind=handwriting 的区域。它**只用于把笔迹从 OCR 与帧差/墨迹里排除，交付图照旧保留**，
+且**消费方按帧用、不按框挖**（理由见 handwriting_regions 的 docstring）：所以 masks() 会
+跳过 handwriting，消费方要用 strokes() 拿判据参数逐帧重算。
+判据实现只有一份，在 segmenters/framesig.py 的 stroke_mask（叶子工具，两个消费方共用）。
+
 坐标系（**写错就是掩码错位**）
 --------------------------
 ``box`` 是相对坐标 ``[l, t, r, b]``，坐标空间是**抽帧后的画面**（``[frames].crop`` 之后、
@@ -61,12 +69,17 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
+# 彩色细笔画（手写笔迹）判据的实现放在 segmenters/framesig.py（叶子工具）：它同时被本模块
+# （产出手写区域）与 stable.py 的签名（把笔迹从帧差里挖掉）用。一份实现两处用，避免漂移。
+from ..segmenters.framesig import STROKE_DEFAULTS, stroke_mask, stroke_params
+
 SCHEMA = "bnote-overlay/1"
 ALGO = "bnote-overlay/1"
 BASIS = "cache/frames/index.json"          # source.basis：帧从哪来（只可能是抽帧产物）
 
-# kind 枚举（我们只用得上前两个，但取值**只能**来自这里）
-KINDS = ("caption_strip", "overlay_widget", "watermark", "progress_bar", "cursor")
+# kind 枚举（取值**只能**来自这里）。handwriting 是 M4 新增：彩色细笔画 = 手写笔迹，
+# **只用于把它从 OCR 与帧差/墨迹里排除，交付图里照旧保留**。
+KINDS = ("caption_strip", "overlay_widget", "watermark", "progress_bar", "cursor", "handwriting")
 
 PROFILE_W = 160                 # 低分辨率统计宽度（高度按源帧长宽比换算）
 LEGACY_W, LEGACY_H = 48, 27     # 旧判据（stable._detect_caption_strip）的签名分辨率，逐字沿用
@@ -110,6 +123,13 @@ def params(cfg: dict) -> dict:
         "widget_edge_min": float(ov.get("widget_edge_min", 0.03)),
         "widget_color_min": int(ov.get("widget_color_min", 6)),
         "widget_pad": float(ov.get("widget_pad", 0.008)),
+        # —— M4 新增：手写笔迹（判据实现在 segmenters/framesig.py）——
+        "handwriting_enabled": bool(ov.get("handwriting_enabled", True)),
+        "handwriting_stride": int(ov.get("handwriting_stride", 2)),
+        "handwriting_min_frac": float(ov.get("handwriting_min_frac", 0.0002)),
+        "handwriting_min_frames": int(ov.get("handwriting_min_frames", 3)),
+        "handwriting_pad": float(ov.get("handwriting_pad", 0.01)),
+        **{k: float(ov.get(k, v)) for k, v in STROKE_DEFAULTS.items()},
     }
 
 
@@ -151,13 +171,20 @@ def scan(frames_dir: Path, files: list, p: dict) -> dict:
     zones = rel_zones(float(p["widget_zone"])) if p["widget_enabled"] else []
     wbest = {name: None for name, _ in zones}
     wheard = {name: 0 for name, _ in zones}
+    # M4 手写笔迹：逐**采样**帧算一次彩色细笔画掩膜（判据在 framesig.stroke_mask）。
+    # stride 是为了控成本：笔迹是"这一段有没有"的量，不需要每帧都量；而它的两个消费方
+    # （stable 的签名、ocr 的送识别图）都是**按帧现算**的，不依赖这里扫了几帧。
+    hw = [] if p["handwriting_enabled"] else None
+    hsum = None
+    hfrac_max = 0.0
+    hframes = 0
 
     thr = float(p["diff_threshold"]) * 0.6     # 旧实现的门槛：带内平均差 > 0.6×diff_threshold
     lb = int(LEGACY_H * (1.0 - float(p["caption_strip_ratio"])))   # 固定底部带（旧口径）
     lt = max(2, int(LEGACY_H * 0.35))                              # 旧口径的「标题区」对照
     l_hit_b = l_hit_m = l_n = 0
 
-    for name in files:
+    for fi, name in enumerate(files):
         path = frames_dir / name
         try:
             with Image.open(path) as im0:
@@ -200,6 +227,21 @@ def scan(frames_dir: Path, files: list, p: dict) -> dict:
             if cur is None or (hue, edge) > (cur["hue"], cur["edge"]):
                 wbest[corner] = {"hue": hue, "edge": edge, "crop": sub,
                                  "zone": (zl, zt, zr, zb)}
+        if hw is not None and (fi % max(1, int(p["handwriting_stride"]))) == 0:
+            sm = stroke_mask(np.asarray(rgbim.resize(
+                (PROFILE_W * 2, max(2, int(round(PROFILE_W * 2 * h / float(w))))),
+                Image.BILINEAR), dtype=np.float32) / 255.0,
+                stroke_params(p))
+            if sm.size:
+                frac = float(sm.mean())
+                if hsum is None or hsum.shape != sm.shape:
+                    hsum = np.zeros(sm.shape, dtype=np.float32)
+                hsum += sm.astype(np.float32)
+                hframes += 1
+                if frac > hfrac_max:
+                    hfrac_max = frac
+                if frac >= float(p["handwriting_min_frac"]):
+                    hw.append((name, frac))
         if prev_fine is not None:
             d = np.abs(fine - prev_fine)
             rows.append(d.mean(axis=1))
@@ -216,8 +258,12 @@ def scan(frames_dir: Path, files: list, p: dict) -> dict:
 
     if sum_g is None or not rows:
         return {"R": None, "mean": None, "chg": None, "widget": {}, "heard": {},
-                "pairs": 0, "size": size, "legacy": None}
+                "pairs": 0, "size": size, "legacy": None,
+                "stroke_sum": None, "stroke_frames": 0, "stroke_frac_max": 0.0,
+                "stroke_hits": []}
     return {
+        "stroke_sum": hsum, "stroke_frames": hframes, "stroke_frac_max": hfrac_max,
+        "stroke_hits": hw,
         "R": np.array(rows, dtype=np.float32),
         "mean": sum_g / n,
         "chg": chg / max(1, len(rows)),
@@ -464,6 +510,73 @@ def widget_regions(paths, files: list, scan_out: dict, p: dict) -> list:
     return regions
 
 
+# ---------------------------------------------------------------- 判据 3：手写笔迹
+def handwriting_regions(files: list, scan_out: dict, p: dict) -> tuple:
+    """手写笔迹：彩色细笔画（红/橙笔；蓝窗默认关）→ 一条 handwriting 区域。
+
+    与另两条判据最大的不同：**消费方要按帧用，不能按框挖**。
+    笔迹在画面上是移动、累积的（p22 一页上越写越多），一个全局框会把其余帧同位置的正文
+    一起挖掉（这正是 M3 角状外物那条判据被默认关掉的原因）。所以这里的 box 只是**审计与
+    检索范围**：告诉人"这一集的笔迹大致落在哪"，而 stable / ocr 拿到 overlay.json 后按
+    params 里的 handwriting_* 判据**逐帧**重算笔画掩膜。契约里 kind=handwriting 的语义
+    （"只用于把它从 OCR 与帧差里排除，交付图照旧保留"）就是靠这条实现的。
+
+    产出条件（任一条不成立就**不落区域**，并返回一句理由由 analyze 写进文档级 applicability）：
+      ① 采样帧里至少 handwriting_min_frames 帧的笔画占比 >= handwriting_min_frac；
+      ② 这些帧的笔画像素并集能给出一个非空包围盒。
+    返回 (regions, reason)：regions 为空时 reason 非空。
+    """
+    apply_note = ("按帧应用：消费方（stable/ocr）用 params 里的 handwriting_* 判据逐帧重算笔画"
+                  "掩膜再涂白，**不是**把这条 box 整块挖掉（box 只是审计范围）")
+    hits = scan_out.get("stroke_hits") or []
+    hsum = scan_out.get("stroke_sum")
+    sampled = int(scan_out.get("stroke_frames") or 0)
+    frac_max = float(scan_out.get("stroke_frac_max") or 0.0)
+    # 判不出**不落区域**（返回空列表 + 一句理由，由 analyze 写进文档级 applicability 的 note）。
+    # 为什么不落成"box=None 的 insufficient 区域"：契约要求每条 region 带 box，消费方（切片 /
+    # 量测 / 复核脚本）都是按"有 box 才能用"写的；落一条没有 box 的区域只会到处埋雷。
+    # §3.4-3 的"不许静默返回空"由**文档级 note 里的这句理由**满足，不是靠塞一条残疾区域。
+    if not p["handwriting_enabled"]:
+        return [], "手写笔迹判据按配置关闭（[overlay].handwriting_enabled=false）"
+    if hsum is None or not hits:
+        return [], ("手写笔迹判据不成立（采样 %d 帧，笔画像素占比最高 %.5f，低于下限 %.5f；%s）"
+                    % (sampled, frac_max, float(p["handwriting_min_frac"]), apply_note))
+    if len(hits) < int(p["handwriting_min_frames"]):
+        return [], ("手写笔迹判据不成立（命中 %d 帧 < 门槛 %d 帧；%s）"
+                    % (len(hits), int(p["handwriting_min_frames"]), apply_note))
+    keep = hsum >= int(p["handwriting_min_frames"])
+    ys, xs = np.where(keep)
+    if ys.size == 0:
+        return [], ("手写笔迹判据不成立（没有重复出现的笔画像素；%s）" % apply_note)
+    h, w = hsum.shape
+    pad = float(p["handwriting_pad"])
+    box = [round(max(0.0, float(xs.min()) / w - pad), 4),
+           round(max(0.0, float(ys.min()) / h - pad), 4),
+           round(min(1.0, (float(xs.max()) + 1) / w + pad), 4),
+           round(min(1.0, (float(ys.max()) + 1) / h + pad), 4)]
+    area = (box[2] - box[0]) * (box[3] - box[1])
+    conf = float(min(0.8, 0.35 + 0.3 * min(1.0, len(hits) / max(1.0, sampled) * 4.0)
+                     + 0.3 * min(1.0, frac_max / 0.01)))
+    return [{"kind": "handwriting", "box": box, "confidence": round(conf, 2),
+             "evidence": {"criterion": "color_stroke",   # 成功路径：box 一定是四元组（判不出则不落区域）
+                          "stroke_frames": len(hits), "frames_sampled": sampled,
+                          "stride": int(p["handwriting_stride"]),
+                          "stroke_frac_max": round(frac_max, 5),
+                          "min_frac": float(p["handwriting_min_frac"]),
+                          "min_frames": int(p["handwriting_min_frames"]),
+                          "area_ratio": round(area, 4),
+                          "hue_windows": [[0.0, float(p["handwriting_hue_max"])],
+                                          [float(p["handwriting_hue_min"]), 360.0],
+                                          [float(p["handwriting_blue_min"]),
+                                           float(p["handwriting_blue_max"])],
+                                          ],
+                          "sat_min": float(p["handwriting_sat_min"]),
+                          "val_min": float(p["handwriting_val_min"]),
+                          "bg_light_min": float(p["handwriting_light_min"]),
+                          "note": apply_note},
+             "applicability": OK}], None
+
+
 # ---------------------------------------------------------------- 主流程
 def _params_doc(p: dict) -> dict:
     return {k: p[k] for k in (
@@ -472,7 +585,8 @@ def _params_doc(p: dict) -> dict:
         "caption_row_multiple", "caption_row_gap",
         "widget_enabled", "widget_zone", "widget_changed_max", "widget_samples",
         "widget_min_area", "widget_max_area", "widget_edge_min", "widget_color_min",
-        "widget_pad")}
+        "widget_pad", "handwriting_enabled", "handwriting_stride", "handwriting_min_frac",
+        "handwriting_min_frames", "handwriting_pad", *STROKE_DEFAULTS.keys())}
 
 
 def analyze(cfg: dict, paths, frames=None) -> dict:
@@ -503,6 +617,11 @@ def analyze(cfg: dict, paths, frames=None) -> dict:
                 applies.append("底部带变化率未过阈值（字幕条判据不成立）")
             if p["widget_enabled"]:
                 regions.extend(widget_regions(paths, files, out, p))
+            if p["handwriting_enabled"]:
+                hw_regs, hw_reason = handwriting_regions(files, out, p)
+                regions.extend(hw_regs)
+                if hw_reason:
+                    applies.append(hw_reason)
             if not regions:
                 applies.append("角状外物判据也不成立（没有同时满足「位置固定 + 帧间几乎不变 "
                                "+ 有细小字符或色块」的边角区域）"
@@ -510,13 +629,20 @@ def analyze(cfg: dict, paths, frames=None) -> dict:
                                "角状外物判据按配置关闭（[overlay].widget_enabled=false，"
                                "默认值，理由见 config/default.toml 的注释）")
 
-    masked = bool(regions)
+    # handwriting 区域**不进遮罩面积**：它的 box 只是审计范围（按帧应用，见 handwriting_regions），
+    # 把它算进 masked_area_ratio 会给出"遮掉了 90% 画面"这种误导性数字。
+    hw = [r for r in regions if r.get("kind") == "handwriting" and r.get("applicability") == OK]
+    boxed = [r for r in regions if r.get("kind") != "handwriting"]
+    masked = bool(boxed)
     note = ("已按遮罩算：stable 挖掉这些区域后再算帧差/墨迹/清晰度/送 OCR，"
             "measure 用 drawbox 在同一遍解码里挖掉同样的像素" if masked
-            else "未产出可用遮罩（%s）；消费方退化为全画面，与 M3 之前一致"
+            else "未产出可整块挖的遮罩（%s）；消费方退化为全画面，与 M3 之前一致"
                  % "；".join(applies))
+    if hw:
+        note += ("；另有 %d 条 handwriting 区域（手写笔迹）：**不整块挖、不计入遮罩面积**，"
+                 "消费方按 params 的 handwriting_* 判据逐帧重算笔画掩膜" % len(hw))
     area = sum(max(0.0, (r["box"][2] - r["box"][0]) * (r["box"][3] - r["box"][1]))
-               for r in regions)
+               for r in boxed)
     return {
         "schema": SCHEMA,
         "vid": paths.vid,
@@ -530,6 +656,8 @@ def analyze(cfg: dict, paths, frames=None) -> dict:
                           "sampling_fps": fps,
                           "note": note},
         "stats": {"region_count": len(regions),
+                  "boxed_region_count": len(boxed),
+                  "handwriting_region_count": len(hw),
                   "masked_area_ratio": round(min(1.0, area), 4)},
     }
 
@@ -542,10 +670,26 @@ def _rel(paths, path) -> str:
 
 
 def masks(doc: dict) -> list:
-    """从 overlay 文档里取出**可采信**的区域框（消费方也可自行读文件，文件即接口）。"""
+    """从 overlay 文档里取出**可采信**的区域框（消费方也可自行读文件，文件即接口）。
+
+    **不含 handwriting**：手写笔迹的 box 只是审计范围，整块挖会把其余帧同位置的正文一起挖掉；
+    消费方应当读 strokes() 拿到判据参数后**逐帧**重算笔画掩膜。
+    """
     return [list(r["box"]) for r in (doc.get("regions") or [])
-            if r.get("applicability") == OK and isinstance(r.get("box"), list)
-            and len(r["box"]) == 4]
+            if r.get("applicability") == OK and r.get("kind") != "handwriting"
+            and isinstance(r.get("box"), list) and len(r["box"]) == 4]
+
+
+def strokes(doc: dict) -> dict | None:
+    """overlay 文档里的**手写笔迹判据参数**（overlay.json 的 params，含 handwriting_* 键）。
+
+    有可采信的 handwriting 区域才返回，否则返回 None（消费方据此决定要不要逐帧挖笔迹）。
+    返回的是 params 整份，framesig.stroke_params() 会挑出自己要的键——单一真源在那边。
+    """
+    for r in (doc.get("regions") or []):
+        if r.get("kind") == "handwriting" and r.get("applicability") == OK:
+            return dict(doc.get("params") or {})
+    return None
 
 
 def run(cfg: dict, paths, force: bool = False) -> dict:
@@ -575,8 +719,11 @@ def summary_line(doc: dict, elapsed: float, dest: str) -> str:
     src = doc.get("source") or {}
     st = doc.get("stats") or {}
     ap = doc.get("applicability") or {}
-    kinds = "、".join("%s@[%s]" % (r["kind"], ",".join("%.3f" % x for x in r["box"]))
-                      for r in (doc.get("regions") or [])) or "无"
+    # box 一律按"四元组或没有"处理：即使将来有人落了一条缺 box 的区域，这里也只报名字不炸
+    kinds = "、".join("%s@[%s]" % (r.get("kind"),
+                                   ",".join("%.3f" % x for x in r["box"]))
+                      for r in (doc.get("regions") or [])
+                      if isinstance(r.get("box"), list) and len(r["box"]) == 4) or "无"
     return ("[overlay] %s 帧 / fps=%s / %s | 区域 %d（%s）| 遮罩面积 %.1f%% | masked=%s | %.1fs → %s"
             % (src.get("frames"), src.get("fps"), src.get("size"), st.get("region_count"), kinds,
                100.0 * float(st.get("masked_area_ratio") or 0.0), ap.get("masked"), elapsed, dest))

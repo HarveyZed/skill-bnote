@@ -74,7 +74,10 @@ def _overlay_masks(paths):
     out = []
     for r in (doc.get("regions") or []):
         box = r.get("box")
-        if r.get("applicability") == "ok" and isinstance(box, list) and len(box) == 4:
+        # kind=handwriting 的区域**不能** drawbox：它的 box 是"整集笔迹落在哪"的审计包围盒
+        # （实测能覆盖 77%~91% 画面），而笔迹要按帧用 params 的判据重算。挖它等于把整幅涂黑。
+        if (r.get("applicability") == "ok" and r.get("kind") != "handwriting"
+                and isinstance(box, list) and len(box) == 4):
             out.append([float(x) for x in box])
     return out
 

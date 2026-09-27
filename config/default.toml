@@ -107,6 +107,27 @@ widget_edge_min       = 0.03   # 全分辨率梯度密度下限（有细小字�
 widget_color_min      = 6      # 显著色块色调档数下限（有彩色色块；**两条都要满足**：
                                # 幻灯片表格的梯度比工具条更高，只看梯度会把表格挖掉）
 
+# —— M4 新增：手写笔迹（判据实现在 segmenters/framesig.py 的 stroke_mask，这里只放参数）——
+# 彩色细笔画 = 手写笔迹 → overlay.json 的 handwriting 区域。**只用于把它从 OCR 与帧差/墨迹里
+# 排除，交付图里照旧保留笔迹**。消费方（stable 的签名 / ocr 的送识别图）按这些参数**逐帧**
+# 重算笔画掩膜，**不是**按 box 整块挖（笔迹逐帧移动、累积，整块挖会伤其余页同位置的正文）。
+# 判不出来时 applicability=insufficient（跑 bnote slides 时会打印一行）。
+handwriting_enabled   = true   # false = 不做手写判定（消费方退化为把笔迹当正文内容）
+handwriting_stride    = 2      # 产区域时每隔几帧量一次（区域只是审计范围，消费方按帧现算）
+handwriting_min_frac  = 0.0002 # 单帧笔画像素占比达到它才算"这帧有笔迹"
+handwriting_min_frames= 3      # 至少这么多帧命中才产出一条区域
+handwriting_pad       = 0.01   # 包围盒外扩（占画面比例）
+handwriting_sat_min   = 0.45   # 饱和度下限（笔画是饱和色，印刷灰字不是）
+handwriting_val_min   = 0.35   # 亮度下限（排除暗色块）
+handwriting_hue_max   = 45.0   # 暖色窗下界：h <= 此值（红/橙笔）
+handwriting_hue_min   = 320.0  # 暖色窗上界：h >= 此值（红笔的另一侧）
+handwriting_blue_min  = 0.0    # 蓝窗：0/0 = 关闭。**实测据**：幻灯片自身的蓝色标题字与青色块
+handwriting_blue_max  = 0.0    #   会被一起涂白（p22 002501 的蓝色小标题），伤正文，所以默认关
+handwriting_light_min = 0.65   # 笔迹邻近背景的亮度下限（写在浅底上）
+handwriting_block_window = 5   # 判"实心色块内部"的滑窗边长（分析尺度像素）
+handwriting_block_dens   = 0.95 # 窗内饱和像素占比达到它就不算笔画（红/橙填充块）
+handwriting_bg_window    = 15  # 判"邻近背景亮不亮"的滑窗边长
+
 [roles]
 # M4 帧角色（bnote/layers/roles.py）：把**已抽出的帧**判成五个角色之一，供切片层实现
 # "整页优先"选帧（段内只要存在 full_page 候选，终态就必须选整页）。
