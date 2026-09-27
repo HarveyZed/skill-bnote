@@ -5,6 +5,7 @@
   bnote fetch  <BV|URL>        L1+L2+L3 元信息/媒体/字幕
   bnote slides <BV|URL>        L4+L5+L6 抽帧/切片/OCR
   bnote measure <BV|URL>       L4.5 媒体验测（零 token：逐秒运动/切点/冻结/静音）
+  bnote sheet  <BV|URL>        M2 读字面板：若干帧拼成一张只烧序号的索引图 + 行列→t 映射
   bnote bundle <BV|URL>        L7 交付物
   bnote merge  <BV|URL>        L8 合并成单文件讲义
   bnote brief  <BV|URL>        渲染派单 prompt（chapter/note）
@@ -43,6 +44,7 @@ from .layers import scaffold as scaffold_layer
 from .layers import prompt as prompt_layer
 from .layers import meta as meta_layer
 from .layers import segment as segment_layer
+from .layers import sheet as sheet_layer
 from .layers import subtitle as subtitle_layer
 from .layers import text as text_layer
 from .layers.ocr import Ocr
@@ -568,6 +570,19 @@ def cmd_measure(args):
     return 0
 
 
+def cmd_sheet(args):
+    """M2 读字面板：把若干帧拼成一张**只烧序号**的索引图 → _meta/sheets/*.png + _meta/sheet.json。
+
+    面板里的字**一律不采信**（缩放拼图，只当"这里有东西"的索引）；要读字用
+    `bnote frames --read` 取全分辨率单帧。只在显式调用时跑 —— `[sheet].enabled/.inline`
+    只约束"自动生成 / 写手引用"（M2 无此类自动路径），显式敲这个命令就是要它跑。
+    """
+    cfg, paths, vid = _ctx(args)
+    sheet_layer.run(cfg, paths, t_from=args.time_from, t_to=args.time_to, want=args.max_tiles,
+                    preset=args.preset, cols=args.cols, rows=args.rows)
+    return 0
+
+
 def cmd_merge(args):
     cfg, paths, vid = _ctx(args)
     _stage_merge(cfg, paths)
@@ -664,6 +679,18 @@ def build_parser():
     sp = sub.add_parser("measure", help="零 token 媒体验测：逐秒运动 + 切点/冻结段/静音段 → cache/<vid>/measure.json")
     common(sp)
     sp.set_defaults(func=cmd_measure)
+
+    sp = sub.add_parser("sheet", help="M2 读字面板：若干帧拼成一张只烧序号的索引图 → _meta/sheets/ + sheet.json")
+    common(sp)
+    sp.add_argument("--from", dest="time_from", default=None, help="时间区间起点 HH:MM:SS（媒体文件自己的时间轴）")
+    sp.add_argument("--to", dest="time_to", default=None, help="时间区间终点 HH:MM:SS")
+    sp.add_argument("--max", dest="max_tiles", type=int, default=None,
+                    help="最多几格（默认 cols*rows；上限 max_sheets*cols*rows）")
+    sp.add_argument("--preset", default=None, choices=list(sheet_layer.PRESET_NAMES),
+                    help="单格包围盒档位（默认取 [sheet].preset）")
+    sp.add_argument("--cols", type=int, default=None, help="每张面板列数")
+    sp.add_argument("--rows", type=int, default=None, help="每张面板行数")
+    sp.set_defaults(func=cmd_sheet)
 
     sp = sub.add_parser("stream", help="信息流/口播类（无幻灯片）：只取音频+字幕，不抽帧、不切片、不分章")
     common(sp)

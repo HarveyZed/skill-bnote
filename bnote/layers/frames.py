@@ -12,7 +12,31 @@ from pathlib import Path
 
 from ..tools import find_ffmpeg
 
+
 SECTION_RE = re.compile(r"^(\d{1,2}:\d{2}(?::\d{2})?)-")
+HMS_RE = re.compile(r"^(\d{1,2}):(\d{2})(?::(\d{2}))?$")
+
+
+def parse_hms(s: str) -> float:
+    """把 "HH:MM:SS" / "MM:SS" 解析成秒。只认这两种写法：少个冒号、带小数点这类笔误
+    直接报错，不静默当成 0 —— 取帧取到第 0 秒比报错更难发现。"""
+    m = HMS_RE.match(str(s or "").strip())
+    if not m:
+        raise SystemExit("时间格式应为 HH:MM:SS 或 MM:SS，实际 %r" % (s,))
+    a, b, c = m.groups()
+    if c is None:
+        return float(int(a) * 60 + int(b))
+    return float(int(a) * 3600 + int(b) * 60 + int(c))
+
+
+def to_timeline(cfg: dict, hms: str) -> float:
+    """把「媒体文件自己的时间轴」上的时刻换算到**原始时间轴**（cache/frames/index.json 的 t 就是它）。
+
+    `--sections` 试跑时 media 只含片段：你在片段里看到的 00:03:00 对应原片 00:08:00，
+    差值就是 section_offset()。整集运行时偏移为 0，换算即恒等 —— 但这一步不能省，
+    否则试跑产物上取帧会整体偏掉一个片段起点。
+    """
+    return round(section_offset(cfg) + parse_hms(hms), 3)
 
 
 def section_offset(cfg: dict) -> float:
