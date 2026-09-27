@@ -76,11 +76,44 @@ crop           = ""            # ffmpeg crop 参数 "w:h:x:y"，用于裁掉摄�
 jpg_quality    = 3             # ffmpeg -q:v，2~5
 region         = [0.0, 0.0, 1.0, 1.0]   # 参与"稳定性判定"的画面区域 [l,t,r,b]（相对坐标），默认全画面
 
+[overlay]
+# M3 遮挡区识别（bnote overlay）：从**已抽出的帧**里认出"不是幻灯片内容"的那几块像素 →
+# cache/<vid>/overlay.json（区域 + 判据 + 置信 + 适用性；**不落逐帧掩码**、不含时间戳）。
+# 两类判据：① band_change_rate（底部烧录字幕条，含按行剖面拟合带）
+#           ② corner_static_glyphs（角状外物：标注工具条 / 水印 / 进度条 / 鼠标）
+# 消费方：切片（挖掉遮罩后算帧差/墨迹/清晰度/送 OCR 的图）与量测（motion/freeze 用哪些像素）。
+# 注意：字幕带判据的三条旧参数**沿用 [segment] 的同名键**（caption_strip_ratio /
+#       caption_band_multiple / diff_threshold）——同一份语义只能有一个真源，不在这里抄。
+enabled               = true   # false = 不产出 overlay.json，消费方退化为全画面（旧行为）
+frames_min            = 24     # 帧数少于它写 applicability=insufficient（不静默返回空）
+caption_band_top_limit = 0.45  # 字幕带搜索窗：只能落在画面下方这么多以内（防把正文当字幕）
+caption_rate_min      = 0.15   # 带变化率下限（沿用旧实现的字面阈值 0.15）
+caption_min_rows      = 2      # 拟合出的带至少这么多行（低分辨率行）
+caption_row_multiple  = 2.5    # 带内变化率相对"内容区"的倍数门槛（配合 +0.08 的绝对增量）
+caption_row_gap       = 0      # 允许带内出现几个低变化行（多行字幕留缝；0 = 不允许）
+# 角状外物判据（corner_static_glyphs）**默认关闭**：它在 6 集实测样本上要么漏（p20 的工具条
+# 只闪现 3 帧、p21 只有 8 帧）、要么误（阈值放宽到 5 档色调时 p20 会把左上角 0.30x0.30
+# 的幻灯片标题区当成工具条挖掉），而且逐帧近全分辨率量色块很贵（实测每集 +60~290 s）。
+# 想试就把它打开，并看清 overlay.json 里每条区域的 color_patches / present_frames /
+# frame_count —— 那三个数就是"这条区域该不该采信"的依据。
+widget_enabled        = false  # 是否启用角状外物判据
+widget_zone           = 0.30   # 角状外物的搜索窗边长（占画面宽/高的比例，四角各一个）
+widget_changed_max    = 0.05   # 逐像素"变过的帧对比例"上限（帧间几乎不变）
+widget_samples        = 40     # 每个角留几个候选帧做全分辨率证据（先按低分辨率梯度预筛，                               # 工具条是闪现的：等间隔抽样必然漏，见 overlay.py 模块头）
+widget_pad            = 0.008  # 收紧方框后向外放宽的比例（占搜索窗边长）
+widget_min_area       = 0.004  # 候选区域面积下限（占整幅）
+widget_max_area       = 0.09   # 面积上限（太大就不是角状外物了）
+widget_edge_min       = 0.03   # 全分辨率梯度密度下限（有细小字符）
+widget_color_min      = 6      # 显著色块色调档数下限（有彩色色块；**两条都要满足**：
+                               # 幻灯片表格的梯度比工具条更高，只看梯度会把表格挖掉）
+
 [measure]
 # M1 媒体验测（bnote measure）：**一次解码**同时出切点/冻结段/静音段/逐秒运动，零 token。
-# 只读媒体文件 + cache/frames/index.json，产物 cache/<vid>/measure.json（不含时间戳，可逐字节比对）。
+# 只读媒体文件 + cache/frames/index.json（外加可选的 cache/<vid>/overlay.json），
+# 产物 cache/<vid>/measure.json（不含时间戳，可逐字节比对）。
 # 注意：**不引入 signalstats**（实测占整链 92% 墙钟），所以 motion 只反映画面变化量、不含色彩统计。
-# 冻结/运动按全画面算（未按遮罩），烧录字幕会打断冻结 —— 见产物里的 applicability。
+# M3 起**按遮罩算**：有 overlay.json 就给同一条滤镜链加 drawbox=...:t=fill 把遮挡区涂掉
+# （不额外解码）；拿不到时按全画面算，并在产物的 applicability 里写明 masked=false。
 enabled            = true     # false = 整个量测能力关闭（bnote measure 直接跳过）
 scdet_threshold    = 8.0      # ffmpeg scdet 的硬切阈值（只影响它自己打的 lavfi.scd.time，M1 用逐帧 score）
 cut_score_min      = 8.0      # 切点口径：lavfi.scd.score >= 该值的帧即切点（实测阈值不敏感：>3 得 7、>8 得 6）

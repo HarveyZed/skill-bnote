@@ -49,6 +49,8 @@ class WorkPaths:
     def segments(self) -> Path: return self.cache / "segments.json"
     @property
     def measure(self) -> Path: return self.cache / "measure.json"
+    @property
+    def overlay(self) -> Path: return self.cache / "overlay.json"
 
     def slides(self) -> Path: return self.out / "slides"
     def chapters(self) -> Path: return self.out / "chapters"

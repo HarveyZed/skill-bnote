@@ -4,7 +4,8 @@
   bnote meta   <BV|URL>        L1 元信息
   bnote fetch  <BV|URL>        L1+L2+L3 元信息/媒体/字幕
   bnote slides <BV|URL>        L4+L5+L6 抽帧/切片/OCR
-  bnote measure <BV|URL>       L4.5 媒体验测（零 token：逐秒运动/切点/冻结/静音）
+  bnote overlay <BV|URL>       M3 遮挡区识别（烧录字幕条 / 角状外物：工具条·水印·进度条）
+  bnote measure <BV|URL>       L4.5 媒体验测（零 token：逐秒运动/切点/冻结/静音，M3 起按遮罩算）
   bnote sheet  <BV|URL>        M2 读字面板：若干帧拼成一张只烧序号的索引图 + 行列→t 映射
   bnote frames <BV|URL>        M2 按时间取帧：--at 给最近一帧+前后各一帧；--read 给全分辨率单帧
   bnote bundle <BV|URL>        L7 交付物
@@ -41,6 +42,7 @@ from .layers import media as media_layer
 from .layers import merge as merge_layer
 from .layers import glossary as glossary_layer
 from .layers import note as note_layer
+from .layers import overlay as overlay_layer
 from .layers import scaffold as scaffold_layer
 from .layers import prompt as prompt_layer
 from .layers import meta as meta_layer
@@ -86,7 +88,8 @@ _TREE_CMDS = ("run", "fetch", "slides", "stream")
 # 这些命令在"该集还没取数"时也必须能跑（取数本身，以及清理）
 # measure 只读媒体文件（外加可选的 cache/frames/index.json），不需要 meta.json；
 # 没有媒体时它自己报「请先 bnote fetch」，比 _ctx 的通用报错更贴题。
-_NO_DATA_OK = ("run", "fetch", "slides", "meta", "stream", "measure", "clean")
+# overlay 只读 cache/frames/index.json（外加帧文件），不需要 meta.json 也不需要媒体。
+_NO_DATA_OK = ("run", "fetch", "slides", "meta", "stream", "measure", "overlay", "clean")
 
 
 def _ctx(args):
@@ -557,6 +560,18 @@ def cmd_export(args):
     return 0
 
 
+def cmd_overlay(args):
+    """M3 遮挡区识别：从**已抽出的帧**里认出「不是幻灯片内容」的那几块像素。
+
+    产物 cache/<vid>/overlay.json（区域 + 判据 + 置信 + 适用性；**不落逐帧掩码**）。
+    消费方：切片（帧差/墨迹/清晰度/送 OCR 的图）与量测（motion/freeze 用哪些像素）。
+    判定输入只有 cache/frames/，不重新解码整片；没有帧就先跑 bnote slides。
+    """
+    cfg, paths, vid = _ctx(args)
+    overlay_layer.run(cfg, paths, force=args.force)
+    return 0
+
+
 def cmd_measure(args):
     """零 token 媒体验测：**一次解码**量出逐秒运动 + 切点/冻结段/静音段 → cache/<vid>/measure.json。
 
@@ -690,6 +705,10 @@ def build_parser():
         sp = sub.add_parser(name)
         common(sp)
         sp.set_defaults(func=fn)
+
+    sp = sub.add_parser("overlay", help="M3 遮挡区识别：烧录字幕条 / 角状外物（工具条·水印·进度条）→ cache/<vid>/overlay.json")
+    common(sp)
+    sp.set_defaults(func=cmd_overlay)
 
     sp = sub.add_parser("measure", help="零 token 媒体验测：逐秒运动 + 切点/冻结段/静音段 → cache/<vid>/measure.json")
     common(sp)
