@@ -106,6 +106,9 @@ def build(cfg: dict, paths, meta: dict, transcript: dict, seg_data: dict) -> dic
             "sha256": slideset_layer.sha256_file(dst) if dst.exists() else "",
             "ocr_chars": seg["chosen"].get("ocr_chars", 0),
             "ocr_text": seg["chosen"].get("ocr_text", ""),
+            # M4：帧角色镜像到交付侧（cache/ 可被 clean 整体删除，页角色必须留在 out/ 里）
+            "role": seg.get("role") or seg["chosen"].get("role"),
+            "role_evidence": seg.get("role_evidence") or seg["chosen"].get("role_evidence"),
             "merged_from": seg.get("merged_from", []),
             "boundary_evidence": seg.get("boundary_evidence"),
         })

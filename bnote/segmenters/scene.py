@@ -8,7 +8,8 @@ from __future__ import annotations
 from .framesig import frame_diff, hamming, ink_ratio, sharpness, signature
 
 
-def segment(cfg, paths, frames, transcript, ocr):
+def segment(cfg, paths, frames, transcript, ocr, role_fn=None):
+    """role_fn 是 M4 的接口占位：scene 是 A/B 对照的基线策略，不做角色判定与整页优先。"""
     region = tuple(cfg["frames"].get("region") or (0, 0, 1, 1))
     fps = float(cfg["frames"]["fps"])
     th = float(cfg["segment"].get("scene_threshold", 0.04))

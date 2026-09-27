@@ -85,20 +85,29 @@ def _is_additive(prev_small, cur_small, changed_max: float, old_ink_max: float) 
     return old_ink <= old_ink_max
 
 
-def _overlay_masks(paths):
-    """读 cache/<vid>/overlay.json 里**可采信**的区域框；没有就返回 []。
+def _overlay_spec(paths):
+    """读 cache/<vid>/overlay.json：返回 (遮罩框列表, 手写笔迹判据参数或 None)。
 
-    **文件就是接口**（P1）：这里不 import overlay 层，只认冻结的 regions[].box 与
-    applicability 两个字段。读不出来（缺文件 / 结构不对）一律当"没有遮罩"处理，
-    由调用方打印说明后退化为全画面。
+    **文件就是接口**（P1）：这里不 import overlay 层，只认冻结的 regions[] 与 params。
+    三条规矩：
+      * 只有 applicability == "ok" 的区域可采信；
+      * kind == "handwriting" 的区域**不进遮罩框** —— 它的 box 只是审计范围，按框整块挖会把
+        其余帧同位置的正文一起挖掉；笔迹要按帧用 params 里的 handwriting_* 判据重算（M4）；
+      * 读不出来（缺文件 / 结构不对）一律当"没有遮罩"处理，由调用方打印说明后退化为全画面。
     """
     doc = paths.read_json(paths.overlay) or {}
     boxes = []
+    hand = None
     for r in (doc.get("regions") or []):
+        if r.get("applicability") != "ok":
+            continue
+        if r.get("kind") == "handwriting":
+            hand = dict(doc.get("params") or {})
+            continue
         box = r.get("box")
-        if r.get("applicability") == "ok" and isinstance(box, list) and len(box) == 4:
+        if isinstance(box, list) and len(box) == 4:
             boxes.append(tuple(float(x) for x in box))
-    return boxes
+    return boxes, hand
 
 
 def _mask_cells(masks, rows, cols):
@@ -119,13 +128,13 @@ def _mask_cells(masks, rows, cols):
     return keep
 
 
-def _build_signals(cfg, paths, frames, masks=None):
+def _build_signals(cfg, paths, frames, masks=None, strokes=None):
     region = tuple(cfg["frames"].get("region") or (0, 0, 1, 1))
     sigs, cheap = [], []
     keep = None
     for f in frames:
         p = paths.frames / f["file"]
-        s = signature(p, region, masks)
+        s = signature(p, region, masks, strokes=strokes)
         sigs.append(s)
         if keep is None:
             keep = _mask_cells(masks, s[0].shape[0], s[0].shape[1])
@@ -253,6 +262,7 @@ def _pick_frame(cfg, paths, frames, idxs, sigs, cheap, ocr, stable_mask=None, oc
         m["idx"] = i
         m["t"] = frames[i]["t"]
         m["file"] = frames[i]["file"]
+        m["dhash"] = sigs[i][1]          # 角色终选可能改选另一张候选帧，dhash 要能整条搬过去
         scored.append(m)
 
     span = max(1, len(idxs) - 1)
@@ -289,6 +299,74 @@ def _pick_frame(cfg, paths, frames, idxs, sigs, cheap, ocr, stable_mask=None, oc
     return scored[0], scored
 
 
+def _cand_doc(c: dict) -> dict:
+    """候选帧落盘的字段（角色与判据一起写进去，check 要靠它判"整页优先"是否生效）。"""
+    return {"t": c["t"], "file": c["file"], "score": round(c["score"], 4),
+            "ocr_chars": c["ocr_chars"], "ink": round(c["ink"], 4),
+            "role": c.get("role"), "role_evidence": c.get("role_evidence")}
+
+
+def _union_cands(dst: dict, src: dict) -> None:
+    """把 src 的候选并进 dst（按文件名去重，保序）——合并/吸收都要保留双方的候选证据。"""
+    seen = {c.get("file") for c in (dst.get("_cands") or [])}
+    for c in (src.get("_cands") or []):
+        if c.get("file") not in seen:
+            dst.setdefault("_cands", []).append(c)
+            seen.add(c.get("file"))
+
+
+def _chosen_doc(c: dict) -> dict:
+    return {"t": c["t"], "file": c["file"], "score": round(c["score"], 4),
+            "ocr_chars": c["ocr_chars"], "ocr_text": c.get("ocr_text", ""),
+            "ink": round(c["ink"], 4), "sharp": round(c["sharp"], 5), "dhash": c["dhash"],
+            "role": c.get("role"), "role_evidence": c.get("role_evidence")}
+
+
+def _apply_roles(cfg, paths, out, masks, role_fn) -> None:
+    """M4：判角色 → **整页优先**选帧（§3.5-2/3）。
+
+    三件事，顺序不能换：
+      1) 把全集候选帧交给角色层一次性判完（同一文件只读一次；笔画中位数是**本集口径**）；
+      2) 每段：只要存在 full_page 候选，终态就必须换成其中得分最高的那一张；
+      3) 每段写 role / role_evidence（取自终选帧），候选表里也各写一份（check 靠它复核）。
+    """
+    files = []
+    for seg in out:
+        for c in (seg.get("_cands") or []):
+            if c.get("file"):
+                files.append(c["file"])
+    res = role_fn(cfg, paths, files, masks=masks) or {}
+    switched = 0
+    for seg in out:
+        cands = seg.get("_cands") or []
+        for c in cands:
+            r = res.get(c.get("file"))
+            c["role"] = r["role"] if r else None
+            c["role_evidence"] = r["evidence"] if r else None
+        chosen = seg.get("chosen") or {}
+        # 终选帧在候选表里的那条记录（角色 / 判据都挂在候选上；chosen 自己不带）
+        cur = next((c for c in cands if c.get("file") == chosen.get("file")), None)
+        full = [c for c in cands if c.get("role") == "full_page"]
+        if full and (cur is None or cur.get("role") != "full_page"):
+            best = max(full, key=lambda c: c["score"])
+            if best.get("file") != chosen.get("file"):
+                switched += 1
+                print("[stable] 第 %s 页整页优先：终选 %s（%s）→ %s（full_page，得分 %.4f）"
+                      % (seg.get("id"), chosen.get("file"),
+                         (cur.get("role") if cur else "未判"), best.get("file"), best["score"]))
+            seg["chosen"] = _chosen_doc(best)
+            cur = best
+        if cur is not None and cur.get("role"):
+            seg["role"] = cur["role"]
+            seg["role_evidence"] = cur.get("role_evidence")
+            # 契约 §3.5 要求 chosen 里也写 role（check 只认这一份，cache 被 clean 后 out/ 侧还有）
+            seg["chosen"]["role"] = cur["role"]
+            seg["chosen"]["role_evidence"] = cur.get("role_evidence")
+        seg["candidates"] = [_cand_doc(c) for c in cands]
+    if switched:
+        print("[stable] 整页优先共换帧 %d 处" % switched)
+
+
 def _snap_to_transcript(t, transcript, window):
     if not transcript:
         return t, None
@@ -302,21 +380,25 @@ def _snap_to_transcript(t, transcript, window):
     return t, None
 
 
-def segment(cfg, paths, frames, transcript, ocr):
+def segment(cfg, paths, frames, transcript, ocr, role_fn=None):
     fps = float(cfg["frames"]["fps"])
     th = float(cfg["segment"]["diff_threshold"])
     min_sec = float(cfg["segment"]["stable_min_sec"])
     min_seg = float(cfg["segment"]["min_seg_sec"])
 
     # M3：先看 cache/<vid>/overlay.json 说"哪些像素不是幻灯片内容"，再决定帧差/墨迹/OCR 用什么。
-    masks = _overlay_masks(paths)
+    masks, strokes = _overlay_spec(paths)
     if masks:
         print("[stable] 按 overlay.json 的 %d 个遮罩区域计算帧差/墨迹/清晰度/送 OCR：%s"
               % (len(masks), "、".join("[%.3f,%.3f,%.3f,%.3f]" % m for m in masks)))
-    else:
+    elif not paths.overlay.exists():
         print("[stable] 没有 cache/<vid>/overlay.json → 按**全画面**计算（M3 之前的行为）；"
               "重跑 bnote slides 会自动产出它")
-    sigs, cheap, diffs = _build_signals(cfg, paths, frames, masks)
+    else:
+        print("[stable] overlay.json 里没有可采信的遮挡框（只有手写笔迹判据）→ 帧差/墨迹按**全画面**算")
+    if strokes:
+        print("[stable] 按 overlay.json 的 handwriting 判据**逐帧**挖掉彩色细笔画（笔迹不进帧差/墨迹/OCR）")
+    sigs, cheap, diffs = _build_signals(cfg, paths, frames, masks, strokes)
     strip, strip_region = (None, None)
     if not masks:
         # 旧路径（无 overlay.json）保留冻结的旧实现，结果与 M3 之前逐字节一致
@@ -389,10 +471,10 @@ def segment(cfg, paths, frames, transcript, ocr):
                        "ocr_chars": chosen["ocr_chars"], "ocr_text": chosen.get("ocr_text", ""),
                        "ink": round(chosen["ink"], 4), "sharp": round(chosen["sharp"], 5),
                        "dhash": sigs[chosen["idx"]][1]},
-            "candidates": [{"t": c["t"], "file": c["file"], "score": round(c["score"], 4),
-                            "ocr_chars": c["ocr_chars"], "ink": round(c["ink"], 4)} for c in cands],
+            "candidates": [_cand_doc(c) for c in cands],
             "merged_from": [],
             "_idx": chosen["idx"],
+            "_cands": cands,             # 内存里的完整候选记录（角色终选要用，不落盘）
         })
 
     # ---- 相邻页合并 ----
@@ -436,6 +518,7 @@ def segment(cfg, paths, frames, transcript, ocr):
         keep["n_frames"] += drop["n_frames"]
         keep["merged_from"] = keep.get("merged_from", []) + [drop["id"]] + drop.get("merged_from", [])
         keep["merge_reason"] = reason
+        _union_cands(keep, drop)      # 合并后候选表要含双方，否则角色复核会漏掉被并走的整页候选
 
     out = []
     for seg in segments:
@@ -451,6 +534,7 @@ def segment(cfg, paths, frames, transcript, ocr):
                     keep["n_frames"] += prev["n_frames"]
                     keep["merged_from"] = prev.get("merged_from", []) + [prev["id"]]
                     keep["merge_reason"] = reason
+                    _union_cands(keep, drop)
                     out[-1] = keep
                 else:
                     _merge_into(prev, seg, reason)
@@ -484,6 +568,7 @@ def segment(cfg, paths, frames, transcript, ocr):
         target["t_end"] = max(target["t_end"], seg["t_end"])
         target["merged_from"] = target.get("merged_from", []) + [seg["id"]]
         target.setdefault("merge_reason", "absorb-thin")
+        _union_cands(target, seg)
     out = absorbed
 
     # 边界吸附到字幕句首
@@ -525,5 +610,12 @@ def segment(cfg, paths, frames, transcript, ocr):
 
     for i, seg in enumerate(out, start=1):
         seg["id"] = i
+
+    # M4：角色分类 + 整页优先（放在合并/吸收/吸附之后，作用在**最终**的段与候选集上）
+    if role_fn is not None:
+        _apply_roles(cfg, paths, out, masks, role_fn)
+
+    for seg in out:
         seg.pop("_idx", None)
+        seg.pop("_cands", None)
     return out
