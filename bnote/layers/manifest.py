@@ -276,10 +276,71 @@ def _check_overlay(paths, warns: list) -> None:
                            "pipeline", fix="bnote overlay <URL> --page N（或重跑 bnote slides）"))
 
 
+def _check_roles(paths, warns: list, errors: list) -> None:
+    """M4 帧角色与"整页优先"（§3.5-2/6）。三条规则，级别不同是**有意的**：
+
+      ① 段内**存在** full_page 候选却选了非整页 → error（owner=pipeline，fix 指向重跑切片）。
+         这是"整页优先没生效"的硬证据——工具自己就能判，说明产物是坏的。
+      ② 整段**没有**整页候选（例如整段都是出镜素材 / 插播画面）→ 只 warn。
+         工具判不了不该把产物判红：p20 356.9~417.5 s 整段就是演讲现场配图，那时"选整页"
+         根本无从谈起。
+      ③ 旧产物没有 role 字段（早于 M4 的存量产物，或 bundle 没重跑）→ warn，不拦 merge。
+
+    复核用的是 cache/<vid>/segments.json（段 + 候选表都在里面，候选表里逐帧带 role）。
+    cache 被 clean 掉时降级为只看 out/<vid>/slides.json 的每页 role，并说明复核能力下降。
+    """
+    segs = ((paths.read_json(paths.segments) or {}).get("segments")
+            if paths.segments.exists() else []) or []
+    errors_found = 0
+    nofull = []
+    legacy = 0
+    for seg in segs:
+        chosen = seg.get("chosen") or {}
+        crole = chosen.get("role") or seg.get("role")
+        roles = [(c or {}).get("role") for c in (seg.get("candidates") or [])]
+        if not crole and not any(roles):
+            legacy += 1
+            continue
+        if crole and crole != "full_page" and "full_page" in roles:
+            errors_found += 1
+            errors.append(_err(
+                "第 %s 页终选帧不是整页（role=%s），但本段存在整页候选 —— 整页优先没生效"
+                % (seg.get("id"), crole), "pipeline",
+                fix="重跑 bnote slides <URL> --page N --force（再 bnote bundle）"))
+        elif crole and "full_page" not in roles:
+            nofull.append(str(seg.get("id")))
+    sj = paths.out / "slides.json"
+    pages = (paths.read_json(sj) or {}).get("slides") if sj.exists() else None
+    pages = pages or []
+    miss = [p.get("id") for p in pages if not p.get("role")]
+    if legacy and (not pages or len(miss) == len(pages)):
+        warns.append(_warn(
+            "整集是早于 M4 的存量产物（segments.json / slides.json 都没有 role 字段，共 %d 段）："
+            "无法复核整页优先；重跑 bnote slides 与 bundle 即可获得它" % legacy,
+            "pipeline", fix="bnote slides <URL> --page N --force → bnote bundle"))
+    else:
+        if legacy:
+            warns.append(_warn("cache/<vid>/segments.json 有 %d 段缺 role 字段（部分旧产物）"
+                               % legacy, "pipeline", fix="bnote slides <URL> --page N --force"))
+        if miss:
+            warns.append(_warn("out/<vid>/slides.json 有 %d 页缺 role 字段（bundle 未重跑？）"
+                               % len(miss), "pipeline", fix="重跑 bnote bundle"))
+    if nofull:
+        warns.append(_warn(
+            "有 %d 段整段没有整页候选（第 %s 页；例如整段都是出镜画面/插播素材）：终选帧可能不是"
+            "整页，工具判不了——按 §3.5-2 只警告，请人工看一眼该页的 role_evidence"
+            % (len(nofull), "、".join(nofull[:8])), "pipeline",
+            fix="看 out/<vid>/slides.json 的 role_evidence；确属出镜素材可保留"))
+    if not segs and pages:
+        warns.append(_warn("缺 cache/<vid>/segments.json，无法复核整页优先（只有 out/ 侧的 role）",
+                           "pipeline", fix="重跑 bnote slides 或保留 cache"))
+
+
 def validate(manifest: dict | None, paths, meta: dict, transcript: dict | None,
              cfg: dict | None = None):
     errors, warns = [], []
     _check_overlay(paths, warns)
+    _check_roles(paths, warns, errors)
     tol = int(((cfg or {}).get("manifest") or {}).get("time_tolerance_sec", 1))
 
     if not manifest:

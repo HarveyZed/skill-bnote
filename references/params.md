@@ -74,6 +74,21 @@
 | overlay | caption_row_multiple | `2.5` |
 | overlay | enabled | `True` |
 | overlay | frames_min | `24` |
+| overlay | handwriting_bg_window | `15` |
+| overlay | handwriting_block_dens | `0.95` |
+| overlay | handwriting_block_window | `5` |
+| overlay | handwriting_blue_max | `0.0` |
+| overlay | handwriting_blue_min | `0.0` |
+| overlay | handwriting_enabled | `True` |
+| overlay | handwriting_hue_max | `45.0` |
+| overlay | handwriting_hue_min | `320.0` |
+| overlay | handwriting_light_min | `0.65` |
+| overlay | handwriting_min_frac | `0.0002` |
+| overlay | handwriting_min_frames | `3` |
+| overlay | handwriting_pad | `0.01` |
+| overlay | handwriting_sat_min | `0.45` |
+| overlay | handwriting_stride | `2` |
+| overlay | handwriting_val_min | `0.35` |
 | overlay | widget_changed_max | `0.05` |
 | overlay | widget_color_min | `6` |
 | overlay | widget_edge_min | `0.03` |
@@ -94,6 +109,28 @@
 | profile | stopwords | `['bilibili', 'lilibili', 'bilibihi', 'bilbli', 'bilibi', 'bilibl', 'ilii', 'http', 'https', 'www', 'com', 'cn', 'html', 'jpg', 'png', 'the', 'and', 'for', 'one', 'two', 'you', 'our']` |
 | prompt | desc_cap | `1500` |
 | prompt | top_comment_cap | `1000` |
+| roles | analyze_width | `160` |
+| roles | blank_fg_max | `0.004` |
+| roles | blank_std_max | `0.02` |
+| roles | blank_white_min | `0.995` |
+| roles | enabled | `True` |
+| roles | fg_gap | `0.2` |
+| roles | fullpage_edge_min | `0.004` |
+| roles | fullpage_fg_min | `0.01` |
+| roles | fullpage_mode_min | `0.45` |
+| roles | ink_dark_max | `0.62` |
+| roles | letterbox_delta | `0.3` |
+| roles | letterbox_min | `0.1` |
+| roles | letterbox_window_min | `0.25` |
+| roles | light_threshold | `0.7` |
+| roles | presenter_mode_max | `0.35` |
+| roles | presenter_skin_min | `0.05` |
+| roles | stroke_gap | `0.15` |
+| roles | stroke_width | `320` |
+| roles | zoom_border_min | `0.25` |
+| roles | zoom_content_min | `0.55` |
+| roles | zoom_mode_min | `0.4` |
+| roles | zoom_stroke_multiple | `8.0` |
 | scaffold | noise_patterns | `['bilibili', 'lilibili', '讲师[:：]\\s*\\S+', '第[一二三四五六七八九十]+章[:：]?', 'pptx', 'powerpoint', '幻灯片放映', '幻灯片第\\s*\\d+\\s*张', '共\\s*\\d+\\s*张']` |
 | segment | absorb_thin_chars | `20` |
 | segment | absorb_thin_contain | `0.5` |
@@ -272,6 +309,60 @@ widget_max_area       = 0.09   # 面积上限（太大就不是角状外物了�
 widget_edge_min       = 0.03   # 全分辨率梯度密度下限（有细小字符）
 widget_color_min      = 6      # 显著色块色调档数下限（有彩色色块；**两条都要满足**：
                                # 幻灯片表格的梯度比工具条更高，只看梯度会把表格挖掉）
+
+# —— M4 新增：手写笔迹（判据实现在 segmenters/framesig.py 的 stroke_mask，这里只放参数）——
+# 彩色细笔画 = 手写笔迹 → overlay.json 的 handwriting 区域。**只用于把它从 OCR 与帧差/墨迹里
+# 排除，交付图里照旧保留笔迹**。消费方（stable 的签名 / ocr 的送识别图）按这些参数**逐帧**
+# 重算笔画掩膜，**不是**按 box 整块挖（笔迹逐帧移动、累积，整块挖会伤其余页同位置的正文）。
+# 判不出来时 applicability=insufficient（跑 bnote slides 时会打印一行）。
+handwriting_enabled   = true   # false = 不做手写判定（消费方退化为把笔迹当正文内容）
+handwriting_stride    = 2      # 产区域时每隔几帧量一次（区域只是审计范围，消费方按帧现算）
+handwriting_min_frac  = 0.0002 # 单帧笔画像素占比达到它才算"这帧有笔迹"
+handwriting_min_frames= 3      # 至少这么多帧命中才产出一条区域
+handwriting_pad       = 0.01   # 包围盒外扩（占画面比例）
+handwriting_sat_min   = 0.45   # 饱和度下限（笔画是饱和色，印刷灰字不是）
+handwriting_val_min   = 0.35   # 亮度下限（排除暗色块）
+handwriting_hue_max   = 45.0   # 暖色窗下界：h <= 此值（红/橙笔）
+handwriting_hue_min   = 320.0  # 暖色窗上界：h >= 此值（红笔的另一侧）
+handwriting_blue_min  = 0.0    # 蓝窗：0/0 = 关闭。**实测据**：幻灯片自身的蓝色标题字与青色块
+handwriting_blue_max  = 0.0    #   会被一起涂白（p22 002501 的蓝色小标题），伤正文，所以默认关
+handwriting_light_min = 0.65   # 笔迹邻近背景的亮度下限（写在浅底上）
+handwriting_block_window = 5   # 判"实心色块内部"的滑窗边长（分析尺度像素）
+handwriting_block_dens   = 0.95 # 窗内饱和像素占比达到它就不算笔画（红/橙填充块）
+handwriting_bg_window    = 15  # 判"邻近背景亮不亮"的滑窗边长
+
+[roles]
+# M4 帧角色（bnote/layers/roles.py）：把**已抽出的帧**判成五个角色之一，供切片层实现
+# "整页优先"选帧（段内只要存在 full_page 候选，终态就必须选整页）。
+# 输入只用已抽出的帧 + overlay.json（遮挡区从统计里排除）+ 本批帧自己算出的笔画中位数，
+# **不新增解码**；判据名与关键数字逐帧写进 segments.json / slides.json 的 role_evidence。
+# 判不出就给**低置信**的 full_page（见 roles.py 的说明），不硬判。
+enabled             = true   # false = 不做角色判定（segments.json 不写 role，check 只 warn）
+analyze_width       = 160    # 判据分析宽度（判据都在这个尺度上量，省时间且与分辨率无关）
+stroke_width        = 320    # 笔画尺度量测宽度（比分析宽度细，量化"字有多大"）
+blank_std_max       = 0.02   # 灰度标准差 <= 它判 blank（近纯色/黑场）
+blank_white_min     = 0.995  # 近全白占比 >= 它判 blank
+blank_fg_max        = 0.004  # 前景像素占比 <= 它判 blank（与明暗主题无关的那条）
+letterbox_min       = 0.10   # 黑边总宽下限（上下或左右），配合下一项取较大者
+letterbox_delta     = 0.30   # 黑边要**比本集中位数多**这么多才算插播。为什么不取 0.1：
+                             #   深色主题（p46/BV1CC 这种黑底课件）的"黑"会被逐行/逐列黑边判据吃掉
+                             #   一大片，0.1 时实测 p46 有 67/173 张候选帧被误判成 insert
+                             #   （bars_total 0.97~1.56，而该集中位数 0.72）；0.3 只留"黑边明显更多"的帧
+letterbox_window_min= 0.25   # 黑边之外的内容窗口亮度下限：区分"插屏黑边"与"深色主题自身的黑"
+                             #   （实测 p46 黑底课件页窗口均值 0.05~0.12，真正的插屏黑边外是另一幅亮画面）
+presenter_skin_min  = 0.05   # 肤色像素占比下限（出镜帧的正面证据）
+presenter_mode_max  = 0.35   # 亮度直方图峰占比上限：照片没有成片底色，幻灯片有（关键那条）
+zoom_stroke_multiple= 8.0    # 笔画尺度 >= 本批中位数的多少倍才算"页内放大截图"
+zoom_mode_min       = 0.40   # 放大截图仍要有成片底色
+zoom_content_min    = 0.55   # 内容包围盒面积下限（放大到满屏）
+zoom_border_min     = 0.25   # 内容顶到画面边缘的比例下限（放大截图没有页边距）
+fullpage_mode_min   = 0.45   # 底色成片（直方图峰占比）下限 —— 白底/灰底/深底都适用
+fullpage_fg_min     = 0.01   # 前景像素占比下限（有字/有图才算一页）
+fullpage_edge_min   = 0.004  # 梯度密度下限（有笔画才算一页）
+fg_gap              = 0.20   # 与底色差多少才算前景像素
+ink_dark_max        = 0.62   # 墨迹阈值（沿用 segment 的口径）
+stroke_gap          = 0.15   # 笔画量测的深色阈值相对本帧中位数下移多少
+light_threshold     = 0.70   # light_frac 的阈值（只作记录：判据一律与明暗主题无关）
 
 [measure]
 # M1 媒体验测（bnote measure）：**一次解码**同时出切点/冻结段/静音段/逐秒运动，零 token。

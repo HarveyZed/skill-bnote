@@ -51,5 +51,8 @@
 | keypoints < 下限 / 缺 questions | error | chapter:<id> |
 | 有 slide 未被任何章引用 | warn | chapter:? |
 | 跑过切片却没有 cache/<vid>/overlay.json（M3 遮罩缺位） | warn | pipeline |
+| 段内存在 full_page 候选却选了非整页（M4 整页优先未生效） | error | pipeline |
+| 整段没有整页候选（例如整段都是出镜画面/插播素材；工具判不了） | warn | pipeline |
+| 旧产物没有 role 字段（早于 M4，或 bundle 未重跑） | warn | pipeline |
 
 脚本**不检查**内容（覆盖深度、图注准确性、术语取舍）—— 那些走写作契约与可选 review。
