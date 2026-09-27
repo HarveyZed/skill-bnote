@@ -28,6 +28,19 @@ SCHEMA = {
         "video": {"type": "object"},
         "slide_count": {"type": "integer", "minimum": 1},
         "scaffolded_at": {"type": "string"},
+        "slideset_id": {"type": "string",
+                        "description": "派单时刻那版切片的身份摘要（bnote-slideset/1，形如 sha256:...）；与当前 out/<vid>/slides.json 的 slideset.id 不一致即整集错版（check 报 error）"},
+        "slideset_algo": {"type": "string",
+                          "description": "指纹算法版本（当前 bnote-slideset/1）；换算法时旧摘要不会被误认为同版"},
+        "slideset_at": {"type": "string",
+                        "description": "brief --stage chapter 记录该指纹的时刻（YYYY-MM-DD HH:MM:SS）"},
+        "slideset_count": {"type": "integer", "minimum": 1,
+                           "description": "记录指纹时的页数（与 slide_count 同源，便于一眼对照）"},
+        "slideset_remap": {"type": "object",
+                           "description": "bnote remap 的留痕：把旧版页号映射到当前版后写入 from/to/at；check 对它的存在报 warn（页号已同步、图注未重写）",
+                           "properties": {"from": {"type": ["string", "null"]},
+                                          "to": {"type": "string"},
+                                          "at": {"type": "string"}}},
         "chapters": {"type": "array", "minItems": 1,
                      "items": {"$ref": "#/definitions/chapter"}},
     },
@@ -45,6 +58,8 @@ SCHEMA = {
                 "body": {"type": "string", "pattern": "^[^/]+[.]md$"},
                 "keypoints": {"type": "array", "items": {"type": "string"}, "minItems": 1},
                 "questions": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+                "slideset_id": {"type": "string",
+                                "description": "该章被派单时那版切片的指纹（由 brief/collect 写；写手不要动它）；与当前切片不一致即「该章需重派写手」"},
                 "corrections": {"type": "array", "items": {
                     "type": "object",
                     "required": ["wrong", "right", "evidence"],
@@ -110,6 +125,11 @@ CONTRACT = """# 正文与小节的格式契约（工具校验，写手必须照�
 | 推断类校正(basis=context) / 存疑(uncertainties) 没在正文就地标注 | error | chapter:<id> |
 | stage_merges 的 slides/kept 与本章不符 | error | chapter:<id> |
 | manifest.slide_count 与 slides.json 页数不一致 | error | pipeline |
+| manifest.slideset_id 与当前 slides.json 的切片指纹不一致（整集错版） | error | pipeline |
+| 某章的 slideset_id 与当前切片不一致（该章需重派写手） | error | pipeline |
+| slides/NNNN.jpg 实际 sha256 与 slides.json 记录不符（图被替换/拷贝中断） | error | pipeline |
+| 缺切片指纹：manifest / slides.json 早于本功能，或某几章没被派单覆盖 | warn | pipeline |
+| 存在 slideset_remap 留痕：页号已同步但正文与图注未重写 | warn | pipeline |
 | 章界不连续、末章未覆盖片尾、字幕有段落无归属 | error | manifest |
 | keypoints < 下限 / 缺 questions | error | chapter:<id> |
 | 有 slide 未被任何章引用 | warn | chapter:? |
