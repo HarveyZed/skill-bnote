@@ -364,10 +364,16 @@ def cmd_check(args):
     routing = {}
     for e in list(errors) + list(warns):
         routing.setdefault(e.get("owner", "?"), []).append(e)
+    # 显示上限之外不能静默丢弃：终端没显示出来的条目，仍要能在报告文件里被找到。
+    # 作用域模式下权威报告是 check_<章>.json（**不覆盖** validation.json），所以路径要跟着分支走。
+    report_path = (paths.meta_dir() / ("check_%s.json" % "_".join(only))) if only else paths.validation
     for k in sorted(routing):
         print("%-14s %d 条" % (k, len(routing[k])))
-        for e in routing[k][:6]:
+        shown = routing[k][:6]
+        for e in shown:
             print("   %s %s" % (e.get("message"), ("→ " + e["fix_hint"]) if e.get("fix_hint") else ""))
+        if len(routing[k]) > len(shown):
+            print("   … 还有 %d 条，见 %s" % (len(routing[k]) - len(shown), report_path))
     print("结果：%s（%d 错 / %d 警%s）" % ("通过" if not errors else "未通过", len(errors), len(warns),
                                         "，作用域 %s" % ",".join(only) if only else ""))
     if doc is not None and doc.get("result") == "fail":

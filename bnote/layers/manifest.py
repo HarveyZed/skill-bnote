@@ -210,18 +210,28 @@ def _check_slideset(paths, manifest: dict, chapters: list, errors: list, warns: 
     elif not top:
         warns.append(_warn("manifest 缺 slideset_id（早于本功能）；先 bnote collect 补上", "pipeline"))
     else:
+        missing = [cid for cid, sid in pairs if not sid]
         if top != cur:
-            errors.append(_err("整集错版：manifest 记录的切片指纹 %s 与当前 slides.json 的 %s 不一致"
-                               "（讲义写的是另一版切片）" % (_short_sid(top), _short_sid(cur)),
-                               "pipeline",
-                               fix="重派写手（brief --stage chapter → 重写受影响章），"
-                                   "或用 bnote remap 同步页号后再复核图注"))
+            # 三种情形的**动作相同**（按章重派），但措辞必须分开：整集同一版 ≠ 各章混着几版 ≠ 还有章没盖到。
+            # 只改文案选择，不改任何 error/warn 的数量、owner 与 chapter 字段。
+            kinds = {sid for _, sid in pairs if sid}
+            fix_ch = "按章重派：brief --scope chapter:NN（见下面的章级条目），或用 bnote remap 同步页号后再复核图注"
+            if len(kinds) > 1:
+                errors.append(_err("本集各章写在不同版切片上（章级指纹有 %d 种；顶层汇总 %s ≠ 当前 %s）"
+                                   % (len(kinds), _short_sid(top), _short_sid(cur)), "pipeline", fix=fix_ch))
+            elif missing:
+                errors.append(_err("已记录的章都在同一旧版切片上（顶层汇总 %s ≠ 当前 %s；另有 %d 章没盖到指纹）"
+                                   % (_short_sid(top), _short_sid(cur), len(missing)), "pipeline", fix=fix_ch))
+            else:
+                errors.append(_err("整集错版：manifest 记录的切片指纹 %s 与当前 slides.json 的 %s 不一致"
+                                   "（讲义写的是另一版切片）" % (_short_sid(top), _short_sid(cur)),
+                                   "pipeline", fix=fix_ch))
         for cid, sid in pairs:
             if sid and sid != cur:
-                errors.append(_err("该章需重派写手：章 %s 写在切片 %s 上，当前切片是 %s"
-                                   % (cid, _short_sid(sid), _short_sid(cur)), "pipeline", cid,
+                # 当前切片的指纹交给顶层那一条，章级只留"本章写作时的那个"，扫一眼就能定位到章
+                errors.append(_err("该章需重派写手：章 %s 写作时的切片指纹是 %s（当前切片见顶层那条）"
+                                   % (cid, _short_sid(sid)), "pipeline", cid,
                                    fix="brief --scope chapter:%s → 重写该章" % cid))
-        missing = [cid for cid, sid in pairs if not sid]
         if missing:
             warns.append(_warn("这些章缺 slideset_id（早期派单未覆盖）：%s；无法判断是否同版"
                                % "、".join(missing), "pipeline"))
