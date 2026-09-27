@@ -10,6 +10,12 @@
        取"文字最全 + 最清晰"的帧作为该页终态（动画构建序列自然收敛到最后一帧）；
     5) 相邻页若终态 dHash 相近则合并（转场造成的碎片）；
     6) 段边界吸附到最近的字幕句首，避免切在半句话中间。
+
+M3 起：``cache/<vid>/overlay.json`` 说"哪些像素不是幻灯片内容"（烧录字幕条 / 标注工具条 /
+水印）。这些像素会**同时**从帧差的两项（dHash 汉明距离 + 像素平均绝对差）、墨迹 ink、清晰度
+sharpness 与送 OCR 的图里挖掉 —— 外物既不该搅乱稳定性判定，也不该把文字塞进 chosen 的
+OCR 文本（OCR 文本参与同页判定的 4-gram 包含度，实测 p20/p21/p22 都被工具条文字污染过）。
+没有 overlay.json 时**按全画面算**（M3 之前的行为）并打印一行说明，不报错。
 """
 from __future__ import annotations
 
@@ -79,23 +85,64 @@ def _is_additive(prev_small, cur_small, changed_max: float, old_ink_max: float) 
     return old_ink <= old_ink_max
 
 
-def _build_signals(cfg, paths, frames):
+def _overlay_masks(paths):
+    """读 cache/<vid>/overlay.json 里**可采信**的区域框；没有就返回 []。
+
+    **文件就是接口**（P1）：这里不 import overlay 层，只认冻结的 regions[].box 与
+    applicability 两个字段。读不出来（缺文件 / 结构不对）一律当"没有遮罩"处理，
+    由调用方打印说明后退化为全画面。
+    """
+    doc = paths.read_json(paths.overlay) or {}
+    boxes = []
+    for r in (doc.get("regions") or []):
+        box = r.get("box")
+        if r.get("applicability") == "ok" and isinstance(box, list) and len(box) == 4:
+            boxes.append(tuple(float(x) for x in box))
+    return boxes
+
+
+def _mask_cells(masks, rows, cols):
+    """把相对坐标的遮罩框落到签名网格 (rows, cols)：框中心落在格里就算遮住那一格。
+
+    只给**墨迹**用（被涂白的格子不该算进"这一页画了多少东西"）；帧差不用它 —— 签名阶段
+    已经把遮罩区涂成同一个常数，两帧之差在那里恒为 0。返回 None 表示没有遮罩。
+    """
+    if not masks:
+        return None
+    import numpy as np
+    yy, xx = np.mgrid[0:rows, 0:cols]
+    cy = (yy + 0.5) / rows
+    cx = (xx + 0.5) / cols
+    keep = np.ones((rows, cols), dtype=bool)
+    for (l, t, r, b) in masks:
+        keep &= ~((cx >= l) & (cx <= r) & (cy >= t) & (cy <= b))
+    return keep
+
+
+def _build_signals(cfg, paths, frames, masks=None):
     region = tuple(cfg["frames"].get("region") or (0, 0, 1, 1))
     sigs, cheap = [], []
+    keep = None
     for f in frames:
         p = paths.frames / f["file"]
-        s = signature(p, region)
+        s = signature(p, region, masks)
         sigs.append(s)
-        cheap.append({"ink": ink_ratio(s[0]), "sharp": sharpness(s[0])})
+        if keep is None:
+            keep = _mask_cells(masks, s[0].shape[0], s[0].shape[1])
+        cheap.append({"ink": ink_ratio(s[0][keep]) if keep is not None else ink_ratio(s[0]),
+                      "sharp": sharpness(s[0])})
     alpha = float(cfg["segment"].get("diff_alpha", 0.5))
     diffs = [0.0] + [frame_diff(sigs[i - 1], sigs[i], alpha) for i in range(1, len(sigs))]
     return sigs, cheap, diffs
 
 
-def _detect_caption_strip(sigs, cfg):
-    """识别烧进画面的字幕条：底部横带的变化频率远高于中部时，认为它是口播字幕而非幻灯片内容。
+def _legacy_caption_strip(sigs, cfg):
+    """**冻结的 M3 之前路径**：识别烧进画面的字幕条；只在没有 overlay.json 时才用。
 
-    返回 (行区间 [y0,y1), 相对坐标 region 或 None)
+    M3 的新判据（``band_change_rate``，含按行剖面拟合带）只有一份实现，在
+    bnote/layers/overlay.py；这里保留旧实现逐字不动，是为了让"没有 overlay.json"的旧数据根
+    仍得到与 M3 之前**完全一样**的切片结果（``[segment].auto_caption_strip`` 两种取值都照旧）。
+    新路径（``bnote slides`` 会自动先跑 overlay）不会走到这里。
     """
     if not cfg["segment"].get("auto_caption_strip", True) or len(sigs) < 8:
         return None, None
@@ -169,7 +216,8 @@ def _score_candidate(cfg, cheap_metrics, ocr_info, pos_ratio):
             + 0.001 * pos_ratio)
 
 
-def _pick_frame(cfg, paths, frames, idxs, sigs, cheap, ocr, stable_mask=None, ocr_region=None):
+def _pick_frame(cfg, paths, frames, idxs, sigs, cheap, ocr, stable_mask=None, ocr_region=None,
+               ocr_masks=None):
     """从该页的帧里挑"终态帧"。
 
     关键：动画页的完整状态出现在**稳定区间的末尾**。所以候选池只取"稳定帧"
@@ -210,7 +258,8 @@ def _pick_frame(cfg, paths, frames, idxs, sigs, cheap, ocr, stable_mask=None, oc
     span = max(1, len(idxs) - 1)
     base = min(idxs)
     for m in scored:
-        ocr_info = ocr.text(paths.frames / m["file"], region=ocr_region) if ocr else {"text": "", "chars": 0, "boxes": 0}
+        ocr_info = (ocr.text(paths.frames / m["file"], region=ocr_region, masks=ocr_masks)
+                    if ocr else {"text": "", "chars": 0, "boxes": 0})
         m["ocr_chars"] = ocr_info["chars"]
         m["ocr_boxes"] = ocr_info["boxes"]
         m["ocr_text"] = ocr_info["text"]
@@ -222,7 +271,10 @@ def _pick_frame(cfg, paths, frames, idxs, sigs, cheap, ocr, stable_mask=None, oc
         import difflib
         lines = []
         for m in scored[:2]:
-            info = ocr.text(paths.frames / m["file"], region=ocr_region) if ocr_region else ocr.text(paths.frames / m["file"])
+            if ocr_masks or ocr_region:
+                info = ocr.text(paths.frames / m["file"], region=ocr_region, masks=ocr_masks)
+            else:
+                info = ocr.text(paths.frames / m["file"])
             for ln in re.split(r"[\n；;。]", info.get("text", "")):
                 ln = ln.strip()
                 if len(ln) < 2:
@@ -256,8 +308,19 @@ def segment(cfg, paths, frames, transcript, ocr):
     min_sec = float(cfg["segment"]["stable_min_sec"])
     min_seg = float(cfg["segment"]["min_seg_sec"])
 
-    sigs, cheap, diffs = _build_signals(cfg, paths, frames)
-    strip, strip_region = _detect_caption_strip(sigs, cfg)
+    # M3：先看 cache/<vid>/overlay.json 说"哪些像素不是幻灯片内容"，再决定帧差/墨迹/OCR 用什么。
+    masks = _overlay_masks(paths)
+    if masks:
+        print("[stable] 按 overlay.json 的 %d 个遮罩区域计算帧差/墨迹/清晰度/送 OCR：%s"
+              % (len(masks), "、".join("[%.3f,%.3f,%.3f,%.3f]" % m for m in masks)))
+    else:
+        print("[stable] 没有 cache/<vid>/overlay.json → 按**全画面**计算（M3 之前的行为）；"
+              "重跑 bnote slides 会自动产出它")
+    sigs, cheap, diffs = _build_signals(cfg, paths, frames, masks)
+    strip, strip_region = (None, None)
+    if not masks:
+        # 旧路径（无 overlay.json）保留冻结的旧实现，结果与 M3 之前逐字节一致
+        strip, strip_region = _legacy_caption_strip(sigs, cfg)
     if strip is not None:
         # 用"排除字幕条"的区域重算帧差（字幕每秒都在变，会把稳定性判定搅乱）
         keep = [True] * sigs[0][0].shape[0]
@@ -314,7 +377,8 @@ def segment(cfg, paths, frames, transcript, ocr):
 
     segments = []
     for gi, idxs in enumerate(merged_idx, start=1):
-        chosen, cands = _pick_frame(cfg, paths, frames, idxs, sigs, cheap, ocr, stable_mask, strip_region)
+        chosen, cands = _pick_frame(cfg, paths, frames, idxs, sigs, cheap, ocr, stable_mask, strip_region,
+                                     ocr_masks=masks)
         segments.append({
             "id": gi,
             "t_start": frames[idxs[0]]["t"],

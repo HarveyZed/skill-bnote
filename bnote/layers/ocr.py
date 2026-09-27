@@ -2,6 +2,13 @@
 
 未安装 rapidocr 时 available=False，segmenter 自动退回"墨迹密度 + 清晰度"打分。
 结果按帧文件内容哈希缓存，重复运行不重复推理。
+
+两个可选裁剪口径（都来自 cache/<vid>/overlay.json，见 M3）：
+  * region=(l,t,r,b)：**只保留**这一块再识别（旧口径：正文区之外整体丢掉）；
+  * masks=[(l,t,r,b), ...]：**先挖掉**这几块（涂白）再识别。M3 起用这条——底部字幕条与
+    左下角标注工具条不在同一个矩形里，一个 region 表达不了"两处都要排除"，而把工具条的
+    文字留着会污染"同页判定"的 4-gram 包含度（p20/p21/p22 实测）。
+缓存键带上 region/masks 的指纹，换了口径不会误用旧结果。
 """
 from __future__ import annotations
 
@@ -31,21 +38,48 @@ class Ocr:
         h = hashlib.sha1(img.read_bytes()).hexdigest()[:16]
         return self.paths.ocr / ("%s.json" % h)
 
-    def text(self, img: Path, region=None) -> dict:
-        """region=(l,t,r,b) 相对坐标；用于剔除烧进画面的字幕条（那部分不是幻灯片内容）"""
+    @staticmethod
+    def _mask_key(masks) -> str:
+        """masks 的稳定指纹（排序、round 3 位后散列）：换一组遮罩不该复用旧 OCR 结果。"""
+        norm = sorted(tuple(round(float(x), 3) for x in m) for m in (masks or []))
+        blob = json.dumps(norm, separators=(",", ":")).encode("utf-8")
+        return hashlib.sha1(blob).hexdigest()[:8]
+
+    def text(self, img: Path, region=None, masks=None) -> dict:
+        """region=(l,t,r,b)：只保留这一块；masks=[(l,t,r,b), ...]：把这些块挖掉（涂白）。
+
+        两条口径来自 cache/<vid>/overlay.json，**二选一**：masks 非空就整幅送识别，
+        不再叠加 region 裁剪——"只保留哪儿"和"挖掉哪儿"谁优先很难说清，不如让调用方选。
+        """
         empty = {"text": "", "chars": 0, "boxes": 0}
         if not self.available:
             return empty
         cache = self._cache_path(Path(img))
         key = cache
         suffix = ""
-        if region and tuple(region) != (0.0, 0.0, 1.0, 1.0):
+        use_masks = bool(masks)
+        if use_masks:
+            suffix = "_m%s" % self._mask_key(masks)
+        elif region and tuple(region) != (0.0, 0.0, 1.0, 1.0):
             suffix = "_r%d%d%d%d" % tuple(int(x * 100) for x in region)
+        if suffix:
             key = cache.with_name(cache.stem + suffix + ".json")
         if key.exists():
             return json.loads(key.read_text(encoding="utf-8"))
         try:
-            if suffix:
+            if use_masks:
+                import numpy as np
+                from PIL import Image, ImageDraw
+                im = Image.open(img).convert("RGB")
+                w, h = im.size
+                draw = ImageDraw.Draw(im)
+                for box in masks:
+                    l, t, r, b = box
+                    draw.rectangle([int(l * w), int(t * h),
+                                    max(int(round(r * w)) - 1, 0),
+                                    max(int(round(b * h)) - 1, 0)], fill=(255, 255, 255))
+                result, _ = self.engine(np.asarray(im))
+            elif suffix:
                 from PIL import Image
                 import numpy as np
                 im = Image.open(img).convert("RGB")

@@ -12,9 +12,22 @@ from PIL import Image
 SMALL_W, SMALL_H = 48, 27
 
 
-def signature(path: Path, region=(0.0, 0.0, 1.0, 1.0)):
-    """返回 (small_gray_float32[27,48], dhash_uint64)"""
+def signature(path: Path, region=(0.0, 0.0, 1.0, 1.0), masks=None):
+    """返回 (small_gray_float32[27,48], dhash_uint64)。
+
+    传入 masks（overlay.json 的 regions 框）时**先把它们涂成同一片白**再算签名。涂成同一个
+    常数有两个好处：帧差里这些像素恒为 0（不再污染稳定性判定），dHash 在这些格子上恒等
+    （不再污染汉明距离）。也就是说遮罩同时作用于**帧差的两项**，而不只是像素差那一项。
+    """
     im = Image.open(path).convert("L")
+    if masks:
+        from PIL import ImageDraw
+        w0, h0 = im.size
+        d = ImageDraw.Draw(im)
+        for (l, t, r, b) in masks:
+            x0, y0 = int(l * w0), int(t * h0)
+            x1, y1 = max(int(round(r * w0)) - 1, x0), max(int(round(b * h0)) - 1, y0)
+            d.rectangle([x0, y0, x1, y1], fill=255)
     w, h = im.size
     l, t, r, b = region
     if (l, t, r, b) != (0.0, 0.0, 1.0, 1.0):
