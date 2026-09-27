@@ -263,9 +263,23 @@ def _check_slideset(paths, manifest: dict, chapters: list, errors: list, warns: 
                            fix="抽样看图复核图注，或 brief --stage review；重派写手后 collect 会自动清掉这个标记"))
 
 
+def _check_overlay(paths, warns: list) -> None:
+    """M3：跑过切片却没有 cache/<vid>/overlay.json —— **只 warn，不拦 merge**（§3.4-6）。
+
+    存量产物（M3 之前跑的切片）必然缺这个文件，报 error 会让它们永久红灯；而遮罩缺位
+    的真实后果只是"字幕条与角状外物的像素仍参与帧差与 OCR 文本"——是质量退化，
+    不是结构错误，也不该拦住交付。
+    """
+    if paths.segments.exists() and not paths.overlay.exists():
+        warns.append(_warn("跑过切片但没有 cache/<vid>/overlay.json（M3 遮罩缺位：烧录字幕条与"
+                           "标注工具条的文字仍会参与帧差与 chosen 的 OCR 文本）",
+                           "pipeline", fix="bnote overlay <URL> --page N（或重跑 bnote slides）"))
+
+
 def validate(manifest: dict | None, paths, meta: dict, transcript: dict | None,
              cfg: dict | None = None):
     errors, warns = [], []
+    _check_overlay(paths, warns)
     tol = int(((cfg or {}).get("manifest") or {}).get("time_tolerance_sec", 1))
 
     if not manifest:

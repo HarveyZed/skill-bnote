@@ -152,6 +152,9 @@ def _stage_slides(cfg, paths, args):
     if tp.exists():
         transcript = json.loads(tp.read_text(encoding="utf-8"))
     frames = frames_layer.extract(cfg, paths, media_path, force=args.force)
+    # M3：顺序是 抽帧 → overlay → 切片。切片要按遮罩决定"哪些像素参与判断与打分"，
+    # 所以遮罩必须在切片之前落盘；overlay 只读已抽出的帧，不重新解码整片。
+    overlay_layer.run(cfg, paths, force=args.force)
     ocr = Ocr(cfg, paths)
     seg = segment_layer.build(cfg, paths, frames, transcript, ocr, force=args.force)
     if not cfg["media"].get("keep_video", True):

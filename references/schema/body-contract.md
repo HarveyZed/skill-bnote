@@ -50,5 +50,6 @@
 | 章界不连续、末章未覆盖片尾、字幕有段落无归属 | error | manifest |
 | keypoints < 下限 / 缺 questions | error | chapter:<id> |
 | 有 slide 未被任何章引用 | warn | chapter:? |
+| 跑过切片却没有 cache/<vid>/overlay.json（M3 遮罩缺位） | warn | pipeline |
 
 脚本**不检查**内容（覆盖深度、图注准确性、术语取舍）—— 那些走写作契约与可选 review。

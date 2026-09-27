@@ -123,13 +123,20 @@ run        取数一条龙：meta + media + subtitle + frames + segment + ocr + 
 fetch      只取数（meta + media + subtitle），不做抽帧/切片
 stream     信息流/口播类（无幻灯片）：取音频+字幕 → 分段分块 → 整理稿（--assemble 拼接+校验）
 meta       只取元信息（BV/p/cid/标题/时长/**简介/标签/分区/UP 置顶评论**；旧缓存会自动补取）
-slides     只做抽帧 + 切片 + OCR（改了切片参数后重跑它，再跑 bundle）
+slides     只做抽帧 + 切片 + OCR（改了切片参数后重跑它，再跑 bundle）；M3 起顺序是抽帧 → overlay → 切片
 bundle     只重建交付物（slides/ + slides.json + transcript.md），并快照旧讲义；slides.json 顶层写这一版切片的指纹
            `slideset`（每页含 frame/chosen_t/sha256）—— 摘要只依赖 out/，cache 删掉也能复算
+overlay    M3 遮挡区识别：从**已抽出的帧**里认出"不是幻灯片内容"的那几块像素 → cache/<vid>/overlay.json
+           （① band_change_rate：底部烧录字幕条，按逐行变化剖面拟合带；② corner_static_glyphs：
+           角状外物（标注工具条/水印/进度条）＝位置固定在边角 + 帧间几乎不变 + 有细小字符或色块，
+           后一条在**全分辨率**的若干帧上量，并用多帧交集收紧方框。每条区域带判据、置信与适用性；
+           **不落逐帧掩码**、不含时间戳。只读 cache/frames/，不重新解码整片；认不出来写 insufficient，
+           不静默返回空。切片与量测都读它；没有它时两者退化为全画面并在日志说明）
 measure    零 token 媒体验测：**一次解码**量出逐秒运动 + 切点/冻结段/静音段 → cache/<vid>/measure.json
            （只读媒体文件，另可选读 cache/frames/index.json 给"抽了几帧、可能漏什么"的上界；
-           进度/帧数/最大间隔都写进产物的 coverage；**未按遮罩算**（masked=false）：烧录字幕与标注工具条
-           每秒在变，会污染 motion 与 freezes，M3 之后改读 overlay.json；**不接进 run/slides**，只在显式调用时跑）
+           进度/帧数/最大间隔都写进产物的 coverage；**M3 起按遮罩算**：有 overlay.json 就给同一条
+           滤镜链加 drawbox=...:t=fill 把遮挡区涂掉（不额外解码），applicability 写 masked=true +
+           mask_source；没有就按全画面算并写 masked=false。**不接进 run/slides**，只在显式调用时跑）
 sheet      M2 读字面板：把若干帧拼成一张**只烧序号**的索引图 → out/<vid>/_meta/sheets/*.png + _meta/sheet.json
            （每格只烧序号、**不烧时间码**；行列→帧→t 的权威映射只在 sheet.json；面板里的字**一律不采信**，
            读字请用 frames --read。--from/--to 给时间区间、--max 给格数上限，不指定就从 cache/frames/ 均匀取样；
