@@ -4,6 +4,7 @@
   bnote meta   <BV|URL>        L1 元信息
   bnote fetch  <BV|URL>        L1+L2+L3 元信息/媒体/字幕
   bnote slides <BV|URL>        L4+L5+L6 抽帧/切片/OCR
+  bnote measure <BV|URL>       L4.5 媒体验测（零 token：逐秒运动/切点/冻结/静音）
   bnote bundle <BV|URL>        L7 交付物
   bnote merge  <BV|URL>        L8 合并成单文件讲义
   bnote brief  <BV|URL>        渲染派单 prompt（chapter/note）
@@ -33,6 +34,7 @@ from .layers import remap as remap_layer
 from .layers import xref as xref_layer
 from .layers import bundle as bundle_layer
 from .layers import frames as frames_layer
+from .layers import measure as measure_layer
 from .layers import media as media_layer
 from .layers import merge as merge_layer
 from .layers import glossary as glossary_layer
@@ -79,7 +81,9 @@ _BANNER_CMDS = ("run", "fetch", "slides", "meta")
 # 不必替它们铺一整棵树——否则只读命令会在数据根里留下空目录，让「这集取过数没有」与 clean 的报数失真。
 _TREE_CMDS = ("run", "fetch", "slides", "stream")
 # 这些命令在"该集还没取数"时也必须能跑（取数本身，以及清理）
-_NO_DATA_OK = ("run", "fetch", "slides", "meta", "stream", "clean")
+# measure 只读媒体文件（外加可选的 cache/frames/index.json），不需要 meta.json；
+# 没有媒体时它自己报「请先 bnote fetch」，比 _ctx 的通用报错更贴题。
+_NO_DATA_OK = ("run", "fetch", "slides", "meta", "stream", "measure", "clean")
 
 
 def _ctx(args):
@@ -550,6 +554,20 @@ def cmd_export(args):
     return 0
 
 
+def cmd_measure(args):
+    """零 token 媒体验测：**一次解码**量出逐秒运动 + 切点/冻结段/静音段 → cache/<vid>/measure.json。
+
+    只读媒体文件（外加可选的 cache/frames/index.json 用来给采样盲区上界），
+    不接进 run/slides —— M1 只在显式调用时跑，现有产物与既有成本零变化。
+    """
+    cfg, paths, vid = _ctx(args)
+    media_path = media_layer.find_media(paths)
+    if media_path is None:
+        raise SystemExit("没有媒体文件，请先执行 bnote fetch（%s）" % paths.media)
+    measure_layer.run(cfg, paths, media_path, force=args.force)
+    return 0
+
+
 def cmd_merge(args):
     cfg, paths, vid = _ctx(args)
     _stage_merge(cfg, paths)
@@ -642,6 +660,10 @@ def build_parser():
         sp = sub.add_parser(name)
         common(sp)
         sp.set_defaults(func=fn)
+
+    sp = sub.add_parser("measure", help="零 token 媒体验测：逐秒运动 + 切点/冻结段/静音段 → cache/<vid>/measure.json")
+    common(sp)
+    sp.set_defaults(func=cmd_measure)
 
     sp = sub.add_parser("stream", help="信息流/口播类（无幻灯片）：只取音频+字幕，不抽帧、不切片、不分章")
     common(sp)

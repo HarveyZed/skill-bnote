@@ -8,6 +8,7 @@ cache/<vid>/            中间产物（可随时整体删除）
   media/                下载的 mp4 / m4a / 音频 wav
   subtitle/             字幕原始响应 + 归一化 transcript.json
   frames/               抽帧结果 + index.json
+  measure.json          媒体验测结果（M1：逐秒桶 + 切点/冻结/静音，零 token）
   ocr/                  OCR 结果缓存（按帧内容哈希）
   segments.json         切片结果（核心中间产物）
 out/<vid>/              交付物（Markdown + 图片）—— **内部结构冻结**，正文用 ../slides/NNNN.jpg 相对引用
@@ -46,6 +47,8 @@ class WorkPaths:
     def ocr(self) -> Path: return self.cache / "ocr"
     @property
     def segments(self) -> Path: return self.cache / "segments.json"
+    @property
+    def measure(self) -> Path: return self.cache / "measure.json"
 
     def slides(self) -> Path: return self.out / "slides"
     def chapters(self) -> Path: return self.out / "chapters"

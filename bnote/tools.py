@@ -54,6 +54,17 @@ def find_ffmpeg(cfg: dict) -> str:
     return _link_as_ffmpeg(imageio_ffmpeg.get_ffmpeg_exe(), cfg)
 
 
+def find_ffprobe(cfg: dict) -> str | None:
+    """ffprobe（可选）：只用来读流信息，失败时调用方退化为解析 ffmpeg 的 stderr。
+
+    imageio-ffmpeg 的静态包只带 ffmpeg，所以这里**不**做兜底：没有就返回 None。
+    """
+    custom = cfg["tools"].get("ffprobe")
+    if custom:
+        return custom
+    return shutil.which("ffprobe")
+
+
 def yt_dlp_python(cfg: dict) -> str:
     """返回可执行的 python 解释器（用于 -m yt_dlp）"""
     custom = cfg["tools"].get("yt_dlp")

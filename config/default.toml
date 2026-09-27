@@ -76,6 +76,19 @@ crop           = ""            # ffmpeg crop 参数 "w:h:x:y"，用于裁掉摄�
 jpg_quality    = 3             # ffmpeg -q:v，2~5
 region         = [0.0, 0.0, 1.0, 1.0]   # 参与"稳定性判定"的画面区域 [l,t,r,b]（相对坐标），默认全画面
 
+[measure]
+# M1 媒体验测（bnote measure）：**一次解码**同时出切点/冻结段/静音段/逐秒运动，零 token。
+# 只读媒体文件 + cache/frames/index.json，产物 cache/<vid>/measure.json（不含时间戳，可逐字节比对）。
+# 注意：**不引入 signalstats**（实测占整链 92% 墙钟），所以 motion 只反映画面变化量、不含色彩统计。
+# 冻结/运动按全画面算（未按遮罩），烧录字幕会打断冻结 —— 见产物里的 applicability。
+enabled            = true     # false = 整个量测能力关闭（bnote measure 直接跳过）
+scdet_threshold    = 8.0      # ffmpeg scdet 的硬切阈值（只影响它自己打的 lavfi.scd.time，M1 用逐帧 score）
+cut_score_min      = 8.0      # 切点口径：lavfi.scd.score >= 该值的帧即切点（实测阈值不敏感：>3 得 7、>8 得 6）
+freeze_noise_db    = -60      # freezedetect 的噪声容限（dB）
+freeze_min_sec     = 0.5      # freezedetect 的最短冻结时长
+silence_noise_db   = -35      # silencedetect 的静音门限（dB）
+silence_min_sec    = 0.5      # silencedetect 的最短静音时长
+
 [segment]
 strategy            = "stable"  # stable(默认，稳定态+终态收敛) | scene(基线对照)
 stable_min_sec      = 1.5       # 连续低于阈值的时长达到该值才算"一页讲完"
