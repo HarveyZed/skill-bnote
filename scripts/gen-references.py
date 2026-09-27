@@ -95,7 +95,11 @@ CONTRACT = """# 正文与小节的格式契约（工具校验，写手必须照�
 * 每个 ## 小节标题的下一行只写它依据的幻灯片：*slide 0006* 或 *slides 0014, 0015, 0016*；
   **不要写时间** —— 时间由 bnote retime 从 slides.json 生成，格式 *HH:MM:SS-HH:MM:SS | slide NNNN*；
 * 一个小节内 >=2 张图时，每张图上方要有自己的时间行 *HH:MM:SS | slide NNNN*（同样由 retime 生成）；
-* 图片用相对路径 ../slides/NNNN.jpg（**目录内部结构冻结**，故相对引用永远有效）；
+* 图片引用只有**两类**（白名单，`bnote/layers/refs.py` 是唯一定义处）：主图 `../slides/NNNN.jpg`
+  （页号固定 **4 位**，`slides/` 的页号空间冻结）与读字面板 `../_meta/sheets/<name>.png`
+  （名字必须能在 `_meta/sheet.json` 的 tile 里查到）；两类之外的引用**不认**——既不会被校验放过，
+  也不会被 `merge`/`remap` 改写（相对引用永远有效的前提就是这条白名单）；
+* 面板图是**缩放拼图**，里面的字**一律不采信**：要读字用 `bnote frames --read` 取全分辨率单帧；
 * ### 小结、### 思考 用小节内的三级标题。
 
 ## 就地标注（给读者看的推断与存疑）
@@ -120,6 +124,8 @@ CONTRACT = """# 正文与小节的格式契约（工具校验，写手必须照�
 | 小节缺时间行 / 未展开 / 非 HH:MM:SS | error | chapter:<id> |
 | 小节时间重叠、逆序、越出章界 | error | chapter:<id> |
 | 引用不存在或不属于本章的 slide | error | chapter:<id> / pipeline |
+| 图片引用不在两类白名单内（非 ../slides/NNNN.jpg 或 ../_meta/sheets/<name>.png） | error | chapter:<id> |
+| 正文引用的面板图在 _meta/sheet.json 里找不到对应 tile | error | chapter:<id> |
 | 多图小节缺每图时间行 | error | chapter:<id> |
 | corrections 缺 wrong/right/evidence | error | chapter:<id> |
 | 推断类校正(basis=context) / 存疑(uncertainties) 没在正文就地标注 | error | chapter:<id> |

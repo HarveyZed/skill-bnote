@@ -110,6 +110,15 @@
 | segment | snap_window_sec | `3.0` |
 | segment | stable_min_sec | `1.5` |
 | segment | strategy | `'stable'` |
+| sheet | blank_std_max | `0.02` |
+| sheet | cols | `3` |
+| sheet | enabled | `False` |
+| sheet | inline | `False` |
+| sheet | max_per_chapter | `2` |
+| sheet | max_sheets | `8` |
+| sheet | max_stream | `4` |
+| sheet | preset | `'620x170'` |
+| sheet | rows | `4` |
 | subtitle | auto_retry_partial | `True` |
 | subtitle | backends | `['bili', 'file', 'whisper']` |
 | subtitle | file_path | `''` |
@@ -229,6 +238,23 @@ freeze_noise_db    = -60      # freezedetect 的噪声容限（dB）
 freeze_min_sec     = 0.5      # freezedetect 的最短冻结时长
 silence_noise_db   = -35      # silencedetect 的静音门限（dB）
 silence_min_sec    = 0.5      # silencedetect 的最短静音时长
+
+[sheet]
+# M2 读字面板（bnote sheet）：把若干帧拼成一张**只烧序号**的索引图 →
+# out/<vid>/_meta/sheets/<name>.png + out/<vid>/_meta/sheet.json（行列→帧→t 的权威映射只在 JSON 里）。
+# 铁律：**面板里的字一律不采信**（面板是缩放拼图，只当"这里有东西"的索引）；
+#       要读字必须用 bnote frames --read 取全分辨率单帧。
+# enabled / inline 是给「自动生成 / 写手引用」的开关 —— M2 里没有任何自动路径：
+#       用户显式敲 bnote sheet 就是要它跑，**不受 enabled 拦**（默认 false 也不影响手动使用）。
+enabled            = false      # 是否允许自动/流水线生成面板（预留给 M5：信息流画面旁证、判型 T3）
+inline             = false      # 是否允许写手在正文里引用面板图（预留给 M5 的写作契约）
+preset             = "620x170"  # 单格包围盒：500x140 / 620x170 / 760x210（格宽按源帧长宽比反推）
+cols               = 3          # 每张面板的列数
+rows               = 4          # 每张面板的行数（cols*rows = 每张吃几个候选）
+blank_std_max      = 0.02       # 一格的标准差低于该值判为空白格并跳过（**不占序号、不补位**）
+max_sheets         = 8          # 整集上限（--max 会被夹到 max_sheets*cols*rows）
+max_per_chapter    = 2          # 每章上限（预留给 M5 的自动路径；M2 手动调用不受它拦）
+max_stream         = 4          # 信息流旁证上限（预留给 M5）
 
 [segment]
 strategy            = "stable"  # stable(默认，稳定态+终态收敛) | scene(基线对照)
