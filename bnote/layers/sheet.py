@@ -1,5 +1,7 @@
 """L4.6 读字面板（M2）：把若干帧拼成一张**只烧序号**的索引图。
 
+读字面板 / 采样盲区可核算 / 索引与时间映射分离这三条**做法**参考了 CFITCorporation/video-watch-skill（MIT）的思路；本项目按自身链路用已有 Pillow+numpy 自实现，**未使用其代码**。若将来真复制其代码，必须按其 MIT 许可证附版权声明。
+
 产物（**接口冻结**，键序即结构：schema / vid / algo / params / sheets / tiles / applicability）：
 
   out/<vid>/_meta/sheets/<name>.png   面板图（**只放这里，绝不进 slides/** —— 页号空间要干净）
