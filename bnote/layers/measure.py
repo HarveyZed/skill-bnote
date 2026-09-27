@@ -27,7 +27,7 @@ import time
 from pathlib import Path
 
 from ..tools import find_ffmpeg
-from ..tools import find_ffprobe
+from ..tools import probe_media
 
 SCHEMA = "bnote-measure/1"
 ALGO = "bnote-measure/1"
@@ -48,11 +48,7 @@ FREEZE_END_KEY = "lavfi.freezedetect.freeze_end"
 SILENCE_START_RE = re.compile(r"silence_start:\s*(-?\d+(?:\.\d+)?)")
 SILENCE_END_RE = re.compile(r"silence_end:\s*(-?\d+(?:\.\d+)?)")
 
-# ffprobe 不可用时的兜底：只解析 ffmpeg 的 stderr 头部（不解码，只读流信息）
-FF_DURATION_RE = re.compile(r"Duration:\s*(\d+):(\d\d):(\d\d(?:\.\d+)?)")
-FF_VIDEO_RE = re.compile(r"Stream #\d+:\d+.*?: Video: .*?, (\d+)x(\d+)")
-FF_FPS_RE = re.compile(r"(\d+(?:\.\d+)?) fps")
-FF_AUDIO_RE = re.compile(r"Stream #\d+:\d+.*?: Audio: ")
+# 流信息探测（含 ffprobe 不可用时的三条兜底正则）已挪到 tools.probe_media —— L4 取帧与 L4.5 量测共用一份
 
 
 def _num(x) -> str:
@@ -67,74 +63,7 @@ def _float(raw, default: float = 0.0) -> float:
         return default
 
 
-def _rate(raw) -> float:
-    """"30/1" -> 30.0（ffprobe 的 r_frame_rate 是分数）"""
-    try:
-        if "/" in str(raw):
-            a, b = str(raw).split("/", 1)
-            return float(a) / float(b) if float(b) else 0.0
-        return float(raw)
-    except (TypeError, ValueError):
-        return 0.0
-
-
-# ---------------------------------------------------------------- 流信息探测
-def probe_source(cfg: dict, media_path: Path) -> dict:
-    """media 的时长/帧率/分辨率/音视频轨。ffprobe 优先；没有就解析 ffmpeg 的 stderr。"""
-    ffprobe = find_ffprobe(cfg)
-    if ffprobe:
-        return _probe_with_ffprobe(ffprobe, media_path)
-    return _probe_with_ffmpeg(find_ffmpeg(cfg), media_path)
-
-
-def _probe_with_ffprobe(ffprobe: str, media_path: Path) -> dict:
-    cmd = [ffprobe, "-v", "error", "-print_format", "json",
-           "-show_format", "-show_streams", str(media_path)]
-    proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
-    if proc.returncode != 0:
-        raise SystemExit("[measure] ffprobe 读取流信息失败：%s" % (proc.stderr or "").strip()[-400:])
-    data = json.loads(proc.stdout or "{}")
-    streams = data.get("streams") or []
-    video = next((s for s in streams if s.get("codec_type") == "video"), {})
-    audio = next((s for s in streams if s.get("codec_type") == "audio"), None)
-    duration = _float((data.get("format") or {}).get("duration")) or _float(video.get("duration"))
-    return {
-        "duration": duration,
-        "fps": _rate(video.get("r_frame_rate")) or _rate(video.get("avg_frame_rate")),
-        "width": int(video.get("width") or 0),
-        "height": int(video.get("height") or 0),
-        "has_video": bool(video),
-        "has_audio": audio is not None,
-    }
-
-
-def _probe_with_ffmpeg(ffmpeg: str, media_path: Path) -> dict:
-    """兜底路径：`ffmpeg -i` 的头部信息就够用，不需要真的解码一帧。"""
-    proc = subprocess.run([ffmpeg, "-hide_banner", "-i", str(media_path)],
-                          capture_output=True, text=True, encoding="utf-8", errors="replace")
-    text = proc.stderr or ""
-    dur = 0.0
-    m = FF_DURATION_RE.search(text)
-    if m:
-        dur = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
-    width = height = 0
-    fps = 0.0
-    for line in text.splitlines():
-        if ": Video:" in line:
-            mv = FF_VIDEO_RE.search(line)
-            if mv:
-                width, height = int(mv.group(1)), int(mv.group(2))
-            mf = FF_FPS_RE.search(line)
-            if mf:
-                fps = _float(mf.group(1))
-    return {
-        "duration": dur,
-        "fps": fps,
-        "width": width,
-        "height": height,
-        "has_video": ": Video:" in text,
-        "has_audio": bool(FF_AUDIO_RE.search(text)),
-    }
+# 流信息探测见 tools.probe_media（ffprobe 优先、没有就解析 ffmpeg -i 的 stderr）
 
 
 # ---------------------------------------------------------------- 一次解码
@@ -274,7 +203,7 @@ def _buckets(frames: list[dict], duration: float) -> list[dict]:
 
 def analyze(cfg: dict, paths, media_path: Path) -> dict:
     """跑一次解码并组出 measure 文档（**不落盘**，便于单独测试与复算）。"""
-    info = probe_source(cfg, media_path)
+    info = probe_media(cfg, media_path)
     if not info["has_video"]:
         raise SystemExit("[measure] %s 没有视频轨：量测需要画面（口播/播客类请走 bnote stream）"
                          % media_path.name)

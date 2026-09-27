@@ -1,10 +1,18 @@
-"""外部程序探测：只在这里解析二进制的绝对路径。
+"""外部程序工具：二进制的解析，以及两个**跨层中性**的小工具（流信息探测、文件摘要）。
 
 优先级： 配置 [tools].xxx  >  环境变量 BN_TOOLS_XXX  >  PATH  >  imageio-ffmpeg 内置静态包
+
+为什么探测与摘要放这里（P1：层与层只通过文件通信）：它们是"外部程序/字节"层面的工具，不属于任何
+流水线层。放这里，L4 抽帧（frames）与 L4.5 量测（measure）都能用同一个实现，而不是 L4 反过来 import
+L4.5、或各自再写一份（两份探测迟早漂移，两份 sha256 实现更是会直接影响产物摘要的可比性）。
 """
 from __future__ import annotations
 
+import hashlib
+import json
+import re
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -60,13 +68,120 @@ def find_ffprobe(cfg: dict) -> str | None:
     imageio-ffmpeg 的静态包只带 ffmpeg，所以这里**不**做兜底：没有就返回 None。
 
     溯源（别当成又一处死代码删掉）：0.9.1 清理无人调用的函数时删过它；M1 起重新引入且
-    **有调用点** —— `layers/measure.py` 的 `probe_source()` 用它读时长/帧率/分辨率/有无音轨，
-    拿不到就退化为解析 `ffmpeg -i` 的 stderr。
+    **有调用点** —— 本模块的 `probe_media()` 用它读时长/帧率/分辨率/有无音轨（`bnote measure`
+    与 `bnote frames --read` 都经它），拿不到就退化为解析 `ffmpeg -i` 的 stderr。
     """
     custom = cfg["tools"].get("ffprobe")
     if custom:
         return custom
     return shutil.which("ffprobe")
+
+
+# ---------------------------------------------------------------- 文件摘要（跨层中性）
+_CHUNK = 4 * 1024 * 1024
+
+
+def sha256_file(p) -> str:
+    """流式算文件摘要（4MiB 块），返回 `sha256:<64hex>`。
+
+    放这里而不是某一层里：产物摘要（slides 页图的身份）与读字链（现抽帧的同一性）都要用它，
+    两份实现迟早会在分块/前缀上分叉，而摘要一旦分叉，"逐字节相同"这类断言就不再可信。
+    """
+    h = hashlib.sha256()
+    with Path(p).open("rb") as fh:
+        for blk in iter(lambda: fh.read(_CHUNK), b""):
+            h.update(blk)
+    return "sha256:" + h.hexdigest()
+
+
+# ---------------------------------------------------------------- 流信息探测（跨层中性）
+# ffprobe 不可用时的兜底：只解析 ffmpeg 的 stderr 头部（不解码，只读流信息）
+FF_DURATION_RE = re.compile(r"Duration:\s*(\d+):(\d\d):(\d\d(?:\.\d+)?)")
+FF_VIDEO_RE = re.compile(r"Stream #\d+:\d+.*?: Video: .*?, (\d+)x(\d+)")
+FF_FPS_RE = re.compile(r"(\d+(?:\.\d+)?) fps")
+FF_AUDIO_RE = re.compile(r"Stream #\d+:\d+.*?: Audio: ")
+
+
+def _to_float(raw, default: float = 0.0) -> float:
+    """探测内部的数值解析（与 layers/measure.py 的 `_float` 等价；不互相 import，
+    避免为一个 5 行助手把层再连起来）。"""
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return default
+
+
+def _rate(raw) -> float:
+    """"30/1" -> 30.0（ffprobe 的 r_frame_rate 是分数）"""
+    try:
+        if "/" in str(raw):
+            a, b = str(raw).split("/", 1)
+            return float(a) / float(b) if float(b) else 0.0
+        return float(raw)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def probe_media(cfg: dict, media_path) -> dict:
+    """媒体的时长/帧率/分辨率/有无音视频轨。ffprobe 优先；没有就解析 ffmpeg 的 stderr。
+
+    `bnote measure`（一次解码前的流信息）与 `bnote frames --read`（判断缓存帧是不是原生尺寸）
+    共用这一个实现 —— 媒体尺寸只有一个真源。
+    """
+    ffprobe = find_ffprobe(cfg)
+    if ffprobe:
+        return _probe_with_ffprobe(ffprobe, media_path)
+    return _probe_with_ffmpeg(find_ffmpeg(cfg), media_path)
+
+
+def _probe_with_ffprobe(ffprobe: str, media_path) -> dict:
+    cmd = [ffprobe, "-v", "error", "-print_format", "json",
+           "-show_format", "-show_streams", str(media_path)]
+    proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if proc.returncode != 0:
+        raise SystemExit("[tools] ffprobe 读取流信息失败：%s" % (proc.stderr or "").strip()[-400:])
+    data = json.loads(proc.stdout or "{}")
+    streams = data.get("streams") or []
+    video = next((s for s in streams if s.get("codec_type") == "video"), {})
+    audio = next((s for s in streams if s.get("codec_type") == "audio"), None)
+    duration = _to_float((data.get("format") or {}).get("duration")) or _to_float(video.get("duration"))
+    return {
+        "duration": duration,
+        "fps": _rate(video.get("r_frame_rate")) or _rate(video.get("avg_frame_rate")),
+        "width": int(video.get("width") or 0),
+        "height": int(video.get("height") or 0),
+        "has_video": bool(video),
+        "has_audio": audio is not None,
+    }
+
+
+def _probe_with_ffmpeg(ffmpeg: str, media_path) -> dict:
+    """兜底路径：`ffmpeg -i` 的头部信息就够用，不需要真的解码一帧。"""
+    proc = subprocess.run([ffmpeg, "-hide_banner", "-i", str(media_path)],
+                          capture_output=True, text=True, encoding="utf-8", errors="replace")
+    text = proc.stderr or ""
+    dur = 0.0
+    m = FF_DURATION_RE.search(text)
+    if m:
+        dur = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
+    width = height = 0
+    fps = 0.0
+    for line in text.splitlines():
+        if ": Video:" in line:
+            mv = FF_VIDEO_RE.search(line)
+            if mv:
+                width, height = int(mv.group(1)), int(mv.group(2))
+            mf = FF_FPS_RE.search(line)
+            if mf:
+                fps = _to_float(mf.group(1))
+    return {
+        "duration": dur,
+        "fps": fps,
+        "width": width,
+        "height": height,
+        "has_video": ": Video:" in text,
+        "has_audio": bool(FF_AUDIO_RE.search(text)),
+    }
 
 
 def yt_dlp_python(cfg: dict) -> str:

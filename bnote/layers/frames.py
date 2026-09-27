@@ -11,10 +11,10 @@ import subprocess
 from pathlib import Path
 
 from ..tools import find_ffmpeg
+from ..tools import probe_media
+from ..tools import sha256_file
 
 from . import media as media_layer
-from . import measure as measure_layer
-from . import slideset as slideset_layer
 
 
 SECTION_RE = re.compile(r"^(\d{1,2}:\d{2}(?::\d{2})?)-")
@@ -130,15 +130,15 @@ def _img_size(path):
 def native_size(cfg: dict, paths, media=None):
     """媒体**原生**尺寸 (宽, 高)；媒体不在或探测失败返回 None。
 
-    复用 measure.probe_source（ffprobe 优先、没有就解析 ffmpeg -i 的 stderr）：媒体尺寸只有一个
-    真源，再实现一份探测会与那套兜底逻辑漂移。
+    探测走 tools.probe_media（ffprobe 优先、没有就解析 ffmpeg -i 的 stderr）：媒体尺寸只有一个
+    真源，且 L4 不 import L4.5（P1：层与层只通过文件通信）。
     """
     media = media if media is not None else media_layer.find_media(paths)
     if media is None:
         return None
     try:
-        info = measure_layer.probe_source(cfg, media)
-    except Exception:
+        info = probe_media(cfg, media)
+    except (Exception, SystemExit):   # 探测失败只影响"能否证明原生"：退回复用缓存 + 明确警告
         return None
     w, h = int(info.get("width") or 0), int(info.get("height") or 0)
     return (w, h) if w and h else None
@@ -199,7 +199,7 @@ def extract_native(cfg: dict, paths, t: float, native=None, media=None) -> dict:
             "size": _img_size(dest), "reused": hit,
             "source": "原生现抽（PNG 无损%s）"
                       % ("；该时刻的现抽结果已缓存，未重新解码" if hit else ""),
-            "sha256": slideset_layer.sha256_file(dest)}
+            "sha256": sha256_file(dest)}
 
 
 def read_frame(cfg: dict, paths, t: float) -> dict:
@@ -226,13 +226,13 @@ def read_frame(cfg: dict, paths, t: float) -> dict:
                                                  else "媒体已清理，无法确认原生尺寸"),
                     "warn": None if not scaled else
                             "媒体已清理，取不到原生分辨率；要读小字请先 bnote fetch 取回媒体",
-                    "sha256": slideset_layer.sha256_file(cached)}
+                    "sha256": sha256_file(cached)}
         if size == native:
             return {"t": round(float(f["t"]), 3), "path": cached, "frame": str(f["file"]),
                     "extracted": False, "size": size, "reused": True, "warn": None,
                     "source": "缓存复用（已是原生 %dx%d，与 cache/frames/ 逐字节相同）"
                               % (native[0], native[1]),
-                    "sha256": slideset_layer.sha256_file(cached)}
+                    "sha256": sha256_file(cached)}
         print("[frames] cache/frames/%s 是 %s 的缩放图（媒体原生 %s）→ 现抽原生帧"
               % (f["file"], _size_txt(size), _size_txt(native)))
     return extract_native(cfg, paths, t, native=native, media=media)
@@ -248,7 +248,7 @@ def entry(cfg: dict, paths, t: float, frames: list | None = None) -> dict:
         if p.exists():
             return {"t": round(float(f["t"]), 3), "path": p, "frame": str(f["file"]),
                     "extracted": False, "size": _img_size(p), "reused": True, "warn": None,
-                    "source": "缓存（cache/frames/）", "sha256": slideset_layer.sha256_file(p)}
+                    "source": "缓存（cache/frames/）", "sha256": sha256_file(p)}
         print("[frames] cache/frames/%s 不在（被 clean 过？）→ 现抽" % f["file"])
     return extract_native(cfg, paths, t)
 
@@ -294,7 +294,7 @@ def run_at(cfg: dict, paths, hms: str, read: bool = False) -> dict:
           % (_rel(paths, frame["path"]), _size_txt(frame.get("size")), frame.get("source")))
     print("[frames] sha256 %s" % frame["sha256"])
     if frame.get("frame"):
-        same = frame["sha256"] == slideset_layer.sha256_file(paths.frames / str(frame["frame"]))
+        same = frame["sha256"] == sha256_file(paths.frames / str(frame["frame"]))
         print("[frames] 与 cache/frames/%s %s"
               % (frame["frame"], "逐字节相同（未缩放、未重编码）" if same
                  else "不一致（缓存被动过，重跑 bnote slides）"))

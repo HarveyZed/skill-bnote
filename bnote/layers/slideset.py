@@ -27,10 +27,11 @@ import json
 import time
 from pathlib import Path
 
+from ..tools import sha256_file     # 实现已挪到 tools（跨层中性）；这里保留这个名字给既有调用方用
+
 ALGO = "bnote-slideset/1"                       # 算法版本：同时进摘要前缀与 slideset.algo
 DISPATCH_SCHEMA = "bnote-slideset-dispatch/1"
 DISPATCH_NAME = "slideset_dispatch.json"
-_CHUNK = 4 * 1024 * 1024
 
 
 def r3(x) -> float:
@@ -40,14 +41,6 @@ def r3(x) -> float:
     except (TypeError, ValueError):
         return 0.0
 
-
-def sha256_file(p: Path) -> str:
-    """流式算文件摘要（4MiB 块），返回 `sha256:<64hex>`。"""
-    h = hashlib.sha256()
-    with Path(p).open("rb") as fh:
-        for blk in iter(lambda: fh.read(_CHUNK), b""):
-            h.update(blk)
-    return "sha256:" + h.hexdigest()
 
 
 def page_rows(slides: list, need_hash: bool = False, slides_dir: Path | None = None) -> list:

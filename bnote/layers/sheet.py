@@ -27,8 +27,9 @@ from pathlib import Path
 from PIL import Image, ImageDraw
 import numpy as np
 
+from ..tools import sha256_file
+
 from . import frames as frames_layer
-from . import slideset as slideset_layer
 
 SCHEMA = "bnote-sheet/1"
 ALGO = "bnote-sheet/1"
@@ -182,7 +183,7 @@ def build(cfg, paths, t_from=None, t_to=None, want=None, preset=None, cols=None,
             burn_index(panel, n, scale, x0, y0)
             tiles.append({"index": n, "sheet": sname, "row": r, "col": c,
                           "t": round(float(f["t"]), 3), "frame": str(f["file"]),
-                          "sha256": slideset_layer.sha256_file(src)})
+                          "sha256": sha256_file(src)})
         panel.save(sheets_dir / sname, format="PNG")
         ts = [t["t"] for t in tiles if t["sheet"] == sname]
         sheets_meta.append({"name": sname, "from": min(ts), "to": max(ts),
@@ -233,7 +234,7 @@ def verify(paths, doc: dict) -> list[str]:
         if not fp.exists():
             problems.append("源帧文件不存在：%s" % t.get("frame"))
             continue
-        if str(t.get("sha256") or "") != slideset_layer.sha256_file(fp):
+        if str(t.get("sha256") or "") != sha256_file(fp):
             problems.append("源帧 sha256 与 tiles 记录不符：%s" % t.get("frame"))
         if str(t.get("frame")) in index and abs(index[str(t.get("frame"))] - float(t.get("t"))) > 1e-6:
             problems.append("t 与 frames/index.json 不一致：%s" % t.get("frame"))
