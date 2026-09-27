@@ -58,13 +58,17 @@ EXCLUDES=(--exclude=./env --exclude=./cache --exclude=./out --exclude=./logs
           --exclude=./SKILL-REVIEW.md --exclude=./.bnote-review
           # 发布日记：不进公开仓库，也不随 skill 安装
           --exclude=./CHANGELOG.md
+          # 分支工作文档（含本机路径与分支内决策）：只在开发期存在，合并 main 前删除，绝不进发行集合
+          --exclude=./VISION-PLAN.md
           # 维护者工具：留在仓库里，使用者不需要（入口与建环境脚本仍在发行集合内）
           --exclude=./scripts/install-skill.sh --exclude=./scripts/gen-references.py)
 [ "$WITH_LOCAL" -eq 1 ] || EXCLUDES+=(--exclude=./config/local.toml)
 
 if [ "$DRY" -eq 1 ]; then
   echo "[dry-run] $REPO → $DEST"
-  tar -C "$REPO" "${EXCLUDES[@]}" -cf - . | tar -tf - | head -30
+  # 用 sed 而不是 head：head 提前关管道会让 tar 收到 SIGPIPE，在 set -o pipefail 下把 dry-run 变成 rc=141 的假失败
+  tar -C "$REPO" "${EXCLUDES[@]}" -cf - . | tar -tf - | sed -n "1,30p"
+  echo "（上面只是前 30 条预览）"
   exit 0
 fi
 
