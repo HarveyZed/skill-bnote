@@ -58,6 +58,10 @@ def find_ffprobe(cfg: dict) -> str | None:
     """ffprobe（可选）：只用来读流信息，失败时调用方退化为解析 ffmpeg 的 stderr。
 
     imageio-ffmpeg 的静态包只带 ffmpeg，所以这里**不**做兜底：没有就返回 None。
+
+    溯源（别当成又一处死代码删掉）：0.9.1 清理无人调用的函数时删过它；M1 起重新引入且
+    **有调用点** —— `layers/measure.py` 的 `probe_source()` 用它读时长/帧率/分辨率/有无音轨，
+    拿不到就退化为解析 `ffmpeg -i` 的 stderr。
     """
     custom = cfg["tools"].get("ffprobe")
     if custom:
