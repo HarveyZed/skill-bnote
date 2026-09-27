@@ -573,6 +573,14 @@ def handwriting_regions(files: list, scan_out: dict, p: dict) -> tuple:
                           "sat_min": float(p["handwriting_sat_min"]),
                           "val_min": float(p["handwriting_val_min"]),
                           "bg_light_min": float(p["handwriting_light_min"]),
+                          # 判据是"笔画 vs 实心色块"，按**厚度**分（见 framesig._block_core）：
+                          # 阈值一起落盘，复核者不用翻代码就能重算这条区域
+                          "block_erode": int(p["handwriting_block_erode"]),
+                          "block_pad": int(p["handwriting_block_pad"]),
+                          "ink_max": float(p["handwriting_ink_max"]),
+                          "criterion_note": "厚度 >= 2*block_erode+1 的连通域算实心色块，整块不涂白"
+                                            "（红底白字条/填充框上的字得以保留）；只有笔画涂白，"
+                                            "且最后一圈膨胀不长进深色印刷字",
                           "note": apply_note},
              "applicability": OK}], None
 

@@ -26,8 +26,11 @@ STROKE_DEFAULTS = {
     "handwriting_blue_min": 0.0,      # 蓝窗（0/0 = 关闭：实测幻灯片自身的蓝色标题字会被误挖）
     "handwriting_blue_max": 0.0,
     "handwriting_light_min": 0.55,    # 笔迹邻近背景的亮度下限（写在浅底上）
-    "handwriting_block_window": 5,    # 判"实心色块"的滑窗边长（分析尺度上的像素）
-    "handwriting_block_dens": 0.95,   # 窗内饱和像素占比达到它就算色块内部，不算笔画
+    "handwriting_block_erode": 3,     # 判"实心色块"的腐蚀次数：>=3 次还活着 = 厚度 >=7 px
+                                      #   （320 宽分析尺度）→ 红底白字条/填充框；笔画 1 次就没了
+    "handwriting_block_pad": 3,       # 色块核之外再多保护几圈（见 _block_core 的实测说明）
+    "handwriting_ink_max": 0.62,      # 深色印刷字阈值（沿用 segment 的墨迹口径）：最后一圈膨胀
+                                      #   不许长进这些像素，免得把被笔划过的数字啃掉
     "handwriting_bg_window": 15,      # 判"邻近背景亮不亮"的滑窗边长
 }
 
@@ -67,16 +70,48 @@ def _box_mean(a: np.ndarray, k: int) -> np.ndarray:
     return s / np.maximum(n, 1)
 
 
-def stroke_mask(rgb: np.ndarray, sp: dict) -> np.ndarray:
-    """彩色**细**笔画掩膜（手写笔迹）：饱和色 + 落在笔色窗口 + 不是大色块的内部/边缘 +
-    邻近背景够亮。
+def _block_core(m: np.ndarray, k: int, pad: int = 0) -> np.ndarray:
+    """实心色块的核 + 把它膨胀回整块（**按笔画收紧**的关键一步）。
 
-    为什么这四条（每条都对着实测）：
+    做法：对饱和掩膜做 k 次 4 邻域腐蚀，还活着的像素说明它所在的连通域**两个方向都至少有
+    2k+1 像素厚**；把核再膨胀 k+1 圈，就把整块（含外围）圈住。
+
+    为什么不是"滑窗密度 >= 0.95"（上一版的做法，已废弃）：红底白字条里的**白字把颜色挖空**，
+    字周围的红色像素滑窗密度不够、于是没被算成块、被当成"笔画"涂白 → 白字变白底白字，OCR
+    直接丢字（实测 p22 的"平滑指数：10.00"、表格里被红笔圈住的 0.67→0.07 就是这么来的）。
+    按厚度判就没有这个问题：白字只是把小块挖了几个洞，整块照样够厚。
+
+    实测（320 宽分析尺度）：红底白字条厚 5 px（腐蚀 3 次还剩 31 px），"Rerank" 填充块同样活到
+    腐蚀 3 次；而红笔笔画腐蚀 1 次就没了（p22 两个样本的腐蚀残点全部落在色块内）。所以
+    k = handwriting_block_erode = 3 分得开"笔画"与"实心色块"。
+
+    pad（handwriting_block_pad）是核之外**多保护几圈**：白字周围的色块像素本来就该保住，核按
+    腐蚀次数膨胀（k+1）还不够盖住色块两端那几列 —— 实测 pad=1 时"平滑指数：10.00"的尾字仍被
+    啃掉（读成"10."），pad=3 才完整读回；而 pad=3 时红笔伪文字（一大/粗筛）照样清得掉。
+    """
+    if k <= 0:
+        return np.zeros_like(m)
+    core = m
+    for _ in range(k):
+        core = (core & _shift(core, 1, 0) & _shift(core, -1, 0)
+                & _shift(core, 0, 1) & _shift(core, 0, -1))
+        if not core.any():
+            return core
+    return _dilate(core, k + int(pad))
+
+
+def stroke_mask(rgb: np.ndarray, sp: dict) -> np.ndarray:
+    """彩色**细**笔画掩膜（手写笔迹）：饱和色 + 落在笔色窗口 + **不是实心色块** +
+    邻近背景够亮 + 只按笔画涂白。
+
+    为什么这几条（每条都对着实测）：
     * 饱和色 + 笔色窗口：p22 整集的红笔是 h 约 0~15 的纯红；幻灯片自身的蓝标题、青色块若一起
       挖掉会伤正文，所以蓝窗默认关（handwriting_blue_min/max = 0，实测据见 overlay.py 文档）。
-    * 排除大色块内部**并向外膨胀两格**：幻灯片里的红/橙填充块（p22 流程图）边缘只有 1~2 像素
-      过渡，只去内部会把整块的外圈留成"笔画"。
+    * **按厚度排除实心色块**（_block_core）：红底白字条、填充的流程框都不是笔画；它们的字是
+      "被挖空的"，按滑窗密度判会把字周围的色块当成笔画涂掉，屏幕上的字就没了。
     * 邻近背景要亮：笔是写在浅底上的；这条把暗色主题（BV1CCtz6WEvF_p1）里的彩色元素排除在外。
+    * 最后一圈膨胀**不许长进深色印刷字**：笔划过数字时这一圈会把数字的笔画啃掉（p22 的 0.67
+      被读成 0.07）。宁可留一点红边，也不吃掉屏幕上本来就有的字。
     """
     mx = rgb.max(axis=2)
     mn = rgb.min(axis=2)
@@ -91,17 +126,15 @@ def stroke_mask(rgb: np.ndarray, sp: dict) -> np.ndarray:
     m &= (mx >= sp["handwriting_val_min"]) & warm
     if not m.any():
         return m
-    # "是不是一片实心色块"用滑窗密度判，而不是形态学腐蚀：笔画本身只有 2~4 像素宽
-    # （320 宽的分析尺度上），3x3 腐蚀会把笔画自己吃干净——实测那样只剩零星几点。
-    dens = _box_mean(m.astype(np.float32), int(sp["handwriting_block_window"]))
-    block = _dilate(dens >= float(sp["handwriting_block_dens"]), 1)
+    block = _block_core(m, int(sp["handwriting_block_erode"]), int(sp["handwriting_block_pad"]))
     gray = rgb.mean(axis=2)
     bg = _box_mean(gray, int(sp["handwriting_bg_window"]))
     thin = m & ~block & (bg >= sp["handwriting_light_min"])
     if not thin.any():
         return thin
-    # 向外扩一圈：笔画的抗锯齿边缘饱和度低，不补这一圈会把红笔的淡边留给 OCR 与帧差。
-    return _dilate(thin, 1)
+    # 向外扩一圈补笔画自己的抗锯齿边，但不许长进深色印刷字（见 docstring 最后一条）
+    dark = _dilate(gray < float(sp["handwriting_ink_max"]), 1)
+    return (_dilate(thin, 1) & ~dark) | thin
 
 
 def signature(path: Path, region=(0.0, 0.0, 1.0, 1.0), masks=None, strokes=None,
