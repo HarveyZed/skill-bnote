@@ -14,6 +14,8 @@ import shutil
 import time
 from pathlib import Path
 
+from . import slideset as slideset_layer
+
 FENCE = chr(96) * 3
 
 
@@ -97,11 +99,20 @@ def build(cfg: dict, paths, meta: dict, transcript: dict, seg_data: dict) -> dic
             "t_end": seg["t_end"],
             "time": _ts(seg["chosen"]["t"]),
             "jpg": str(dst.relative_to(out)),
+            # frame/chosen_t 必须落在 out/ 里：摘要只依赖 out/（cache/ 可被 clean 整体删掉），
+            # 指纹才在 cache 清空后仍能复算。sha256 必须 **copy 完再算**（就是 slide 展示的字节）。
+            "frame": Path(str(seg["chosen"]["file"])).name,
+            "chosen_t": slideset_layer.r3(seg["chosen"]["t"]),
+            "sha256": slideset_layer.sha256_file(dst) if dst.exists() else "",
             "ocr_chars": seg["chosen"].get("ocr_chars", 0),
             "ocr_text": seg["chosen"].get("ocr_text", ""),
             "merged_from": seg.get("merged_from", []),
             "boundary_evidence": seg.get("boundary_evidence"),
         })
+    # 这一版切片的身份（顶层 slideset）：摘要只用 out/ 里的 id/页界/frame/sha256，跨机可复算。
+    doc = {"vid": paths.vid, "strategy": seg_data.get("strategy"),
+           "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+           "count": len(slides), "slideset": slideset_layer.compute(slides), "slides": slides}
     # 重切片会改变页序号，而正文用 ../slides/NNNN.jpg 按序号引用：
     # 写新清单前先把旧的快照留一份，`bnote remap --from` 才有可用的对照源。
     old_json = out / "slides.json"
@@ -117,13 +128,18 @@ def build(cfg: dict, paths, meta: dict, transcript: dict, seg_data: dict) -> dic
             snap.write_text(json.dumps(old_doc, ensure_ascii=False, indent=2), encoding="utf-8")
             old_sig = [(s.get("id"), round(float(s.get("t_start", 0)), 1)) for s in old_doc.get("slides", [])]
             new_sig = [(s.get("id"), round(float(s.get("t_start", 0)), 1)) for s in slides]
+            hints = []
+            if old_sig != new_sig:
+                hints.append("页序有变")
+            old_id = slideset_layer.slideset_of(old_doc).get("id")
+            new_id = doc["slideset"]["id"]
+            if old_id and old_id != new_id:
+                # 页序可能一个都没变，但同一页号下的图换了 —— 这正是本指纹要拦的静默失效
+                hints.append("切片指纹已变")
             print("[bundle] 上一版 slides.json 已快照 → %s%s"
-                  % (snap, "（页序有变，bnote remap --from 用它）" if old_sig != new_sig else ""))
-    paths.write_json(out / "slides.json", {
-        "vid": paths.vid, "strategy": seg_data.get("strategy"),
-        "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "count": len(slides), "slides": slides,
-    })
+                  % (snap, ("（%s，bnote remap --from 用它）" % "、".join(hints)) if hints else ""))
+    paths.write_json(out / "slides.json", doc)
+    print("[bundle] 切片指纹 %s（%d 页）" % (doc["slideset"]["id"], doc["slideset"]["count"]))
 
     lines = ["# 完整字幕 · %s" % (meta.get("part") or meta.get("title")),
              "",
