@@ -12,6 +12,9 @@ from pathlib import Path
 
 from ..tools import find_ffmpeg
 
+from . import media as media_layer
+from . import slideset as slideset_layer
+
 
 SECTION_RE = re.compile(r"^(\d{1,2}:\d{2}(?::\d{2})?)-")
 HMS_RE = re.compile(r"^(\d{1,2}):(\d{2})(?::(\d{2}))?$")
@@ -96,3 +99,123 @@ def extract(cfg: dict, paths, media_path: Path, force: bool = False) -> list[dic
                      {"fps": fps, "offset": offset, "count": len(frames), "frames": frames})
     print("[frames] 抽出 %d 帧（%.1f fps，offset=%.0fs）→ %s" % (len(frames), fps, offset, paths.frames))
     return frames
+
+
+# ---------------------------------------------------------------- M2 按时间取帧（bnote frames --at/--read）
+AT_DIRNAME = "frames_at"     # cache/frames/ 被清掉时的现抽落脚点：out/<vid>/_meta/frames_at/
+
+
+def _rel(paths, path) -> str:
+    try:
+        return str(Path(path).relative_to(paths.root))
+    except ValueError:
+        return str(path)
+
+
+def pick_index(frames: list, t: float) -> int:
+    """index 里离 t 最近的那一帧的下标（frames 按 t 升序，二分）。"""
+    lo, hi = 0, len(frames) - 1
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if float(frames[mid]["t"]) < t:
+            lo = mid + 1
+        else:
+            hi = mid
+    cands = [k for k in (lo - 1, lo, lo + 1) if 0 <= k < len(frames)]
+    return min(cands, key=lambda k: abs(float(frames[k]["t"]) - t))
+
+
+def _step(cfg: dict, frames: list) -> float:
+    """前后各一帧的间隔：有 index 就用它的抽帧间隔，否则用 [frames].fps 反推。"""
+    if frames and len(frames) > 1:
+        return max(1e-3, round(float(frames[1]["t"]) - float(frames[0]["t"]), 3))
+    try:
+        return round(1.0 / max(1e-6, float(cfg["frames"]["fps"])), 3)
+    except Exception:
+        return 0.5
+
+
+def extract_at(cfg: dict, paths, t: float) -> dict:
+    """现抽一张：ffmpeg -ss <t> -i <media> -frames:v 1 → out/<vid>/_meta/frames_at/。
+
+    **不缩放**（要读字就得全分辨率）。ffmpeg 会重编码，所以这张与 cache/frames/ 里那张**不逐字节相同**；
+    媒体也没有时明确报错，**不许静默返回空**。
+    """
+    media = media_layer.find_media(paths)
+    if media is None:
+        raise SystemExit(
+            "既没有 cache/frames/index.json 里可用的帧，也没有媒体文件可现抽帧：\n"
+            "  帧目录：%s\n  媒体目录：%s\n"
+            "  → 先跑 bnote fetch（或 bnote run）把媒体取下来" % (paths.frames, paths.media))
+    dest_dir = paths.meta_dir() / AT_DIRNAME
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / ("at_%09.3f.jpg" % float(t))
+    ff = find_ffmpeg(cfg)
+    cmd = [ff, "-y", "-hide_banner", "-loglevel", "error", "-ss", "%.3f" % float(t),
+           "-i", str(media), "-frames:v", "1",
+           "-q:v", str(cfg["frames"]["jpg_quality"]), str(dest)]
+    print("[frames] cache/frames/ 里没有可用的帧 → 现抽一张：%s" % " ".join(cmd))
+    subprocess.run(cmd, check=True)
+    if not dest.exists():
+        raise SystemExit("ffmpeg 没有产出帧文件：%s（先看它上面的报错）" % dest)
+    return {"t": round(float(t), 3), "path": dest, "frame": None, "extracted": True,
+            "sha256": slideset_layer.sha256_file(dest)}
+
+
+def entry(cfg: dict, paths, t: float, frames: list | None = None) -> dict:
+    """t 处那一帧：index 命中就用现成 jpg（**逐字节就是它**），否则现抽一张。"""
+    if frames is None:
+        frames = load_index(paths) or []
+    if frames:
+        f = frames[pick_index(frames, t)]
+        p = paths.frames / str(f["file"])
+        if p.exists():
+            return {"t": round(float(f["t"]), 3), "path": p, "frame": str(f["file"]),
+                    "extracted": False, "sha256": slideset_layer.sha256_file(p)}
+        print("[frames] cache/frames/%s 不在（被 clean 过？）→ 现抽" % f["file"])
+    return extract_at(cfg, paths, t)
+
+
+def around(cfg: dict, paths, t: float) -> list[tuple[int, dict]]:
+    """该时刻最近的一帧 + 前后各一帧（3 条，含路径与 t）。没有 index 时按抽帧间隔现抽三张。"""
+    frames = load_index(paths) or []
+    if not frames:
+        step = _step(cfg, frames)
+        return [(d, entry(cfg, paths, t + d * step, frames=[])) for d in (-1, 0, 1)]
+    k = pick_index(frames, t)
+    out = []
+    for pos in (k - 1, k, k + 1):
+        if 0 <= pos < len(frames):
+            out.append((pos - k, entry(cfg, paths, float(frames[pos]["t"]), frames=frames)))
+    return out
+
+
+def run_at(cfg: dict, paths, hms: str, read: bool = False) -> dict:
+    """bnote frames 的入口：--at 打印 3 条；--read 额外给该时刻的全分辨率单帧路径。"""
+    off = section_offset(cfg)
+    t = to_timeline(cfg, hms)
+    if off:
+        print("[frames] media.sections 偏移 %.0fs 已换算：%s（媒体内）→ %.3fs（原始时间轴）"
+              % (off, hms, t))
+    items = around(cfg, paths, t)
+    if not items:
+        raise SystemExit("取不到帧：%s" % paths.frames)
+    print("[frames] --at %s（原始时间轴 %.3fs）最近的帧 + 前后各一帧：" % (hms, t))
+    tags = {-1: "← prev", 0: "● hit ", 1: "→ next"}
+    for d, it in items:
+        print("  %s  t=%.3fs  %s%s" % (tags[d], it["t"], _rel(paths, it["path"]),
+              "（现抽）" if it["extracted"] else ""))
+    hit = next(it for d, it in items if d == 0)
+    if read:
+        print("[frames] --read 全分辨率单帧：%s" % _rel(paths, hit["path"]))
+        if hit["extracted"]:
+            print("[frames] sha256 %s ｜ 现抽帧（ffmpeg 重编码，不缩放）：cache/frames/ 里没有对应文件，"
+                  "读字以这张为准" % hit["sha256"])
+        else:
+            src = paths.frames / str(hit["frame"])
+            same = hit["sha256"] == slideset_layer.sha256_file(src)
+            print("[frames] sha256 %s ｜ 与 cache/frames/%s %s"
+                  % (hit["sha256"], hit["frame"],
+                     "逐字节相同（未缩放、未重编码）" if same
+                     else "不一致（缓存被动过，重跑 bnote slides）"))
+    return hit

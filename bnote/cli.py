@@ -6,6 +6,7 @@
   bnote slides <BV|URL>        L4+L5+L6 抽帧/切片/OCR
   bnote measure <BV|URL>       L4.5 媒体验测（零 token：逐秒运动/切点/冻结/静音）
   bnote sheet  <BV|URL>        M2 读字面板：若干帧拼成一张只烧序号的索引图 + 行列→t 映射
+  bnote frames <BV|URL>        M2 按时间取帧：--at 给最近一帧+前后各一帧；--read 给全分辨率单帧
   bnote bundle <BV|URL>        L7 交付物
   bnote merge  <BV|URL>        L8 合并成单文件讲义
   bnote brief  <BV|URL>        渲染派单 prompt（chapter/note）
@@ -570,6 +571,20 @@ def cmd_measure(args):
     return 0
 
 
+def cmd_frames(args):
+    """M2 按时间取帧：--at HH:MM:SS 给该时刻最近的一帧 + 前后各一帧（含路径与 t）；
+
+    --read 给该时刻的**全分辨率单帧**路径（读字用）—— 优先直接给 cache/frames/ 里那张 jpg
+    （逐字节相同，证明没有缩放/重编码）；cache/frames/ 被 clean 过就用 ffmpeg 现抽一张到
+    _meta/frames_at/；媒体也没有就明确报错，不静默返回空。
+    """
+    cfg, paths, vid = _ctx(args)
+    if not args.at:
+        raise SystemExit("需要 --at HH:MM:SS（例：bnote frames <URL> --page N --at 00:11:16 --read）")
+    frames_layer.run_at(cfg, paths, args.at, read=args.read)
+    return 0
+
+
 def cmd_sheet(args):
     """M2 读字面板：把若干帧拼成一张**只烧序号**的索引图 → _meta/sheets/*.png + _meta/sheet.json。
 
@@ -679,6 +694,12 @@ def build_parser():
     sp = sub.add_parser("measure", help="零 token 媒体验测：逐秒运动 + 切点/冻结段/静音段 → cache/<vid>/measure.json")
     common(sp)
     sp.set_defaults(func=cmd_measure)
+
+    sp = sub.add_parser("frames", help="M2 按时间取帧：--at HH:MM:SS 给最近一帧+前后各一帧；--read 给全分辨率单帧路径")
+    common(sp)
+    sp.add_argument("--at", default=None, help="时刻 HH:MM:SS（媒体文件自己的时间轴；--sections 时会换算偏移）")
+    sp.add_argument("--read", action="store_true", help="输出该时刻的全分辨率单帧路径（要读字就用它）")
+    sp.set_defaults(func=cmd_frames)
 
     sp = sub.add_parser("sheet", help="M2 读字面板：若干帧拼成一张只烧序号的索引图 → _meta/sheets/ + sheet.json")
     common(sp)
