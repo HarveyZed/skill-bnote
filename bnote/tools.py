@@ -190,3 +190,31 @@ def yt_dlp_python(cfg: dict) -> str:
     if custom:
         return custom
     return sys.executable
+
+
+# ---------------------------------------------------------------- 坐标换算（跨层中性）
+def crop_box_to_media(box, crop: str, media_size):
+    """把「抽帧画面」的相对坐标框 [l,t,r,b] 换算成「媒体原图」的相对坐标框。
+
+    为什么需要它：overlay.json 的 box 按冻结契约是**抽帧后画面**（[frames].crop 之后）的坐标
+    （与 ocr.text(region=) 同一空间）；而 measure 解码的是**媒体原图**。scale 只做等比缩放、
+    不改变相对坐标，所以 [frames].crop 为空时换算恒等；crop 非空时抽帧先被裁掉 w:h:x:y
+    （媒体像素坐标，不随 scale_height 变），直接套用会错位：
+
+        X_media = (x + l * w_crop) / W_media
+
+    crop 串解析不出来时**不猜**：原样返回并 clip（调用方应把它当「可能错位」记进日志）。
+    """
+    l, t, r, b = (float(x) for x in box)
+    W, H = int(media_size[0]), int(media_size[1])
+    parts = [p for p in str(crop or "").split(":") if p.strip() != ""]
+    if len(parts) != 4 or W <= 0 or H <= 0:
+        return [max(0.0, l), max(0.0, t), min(1.0, r), min(1.0, b)]
+    try:
+        cw, ch, cx, cy = (float(x) for x in parts)
+    except ValueError:
+        return [max(0.0, l), max(0.0, t), min(1.0, r), min(1.0, b)]
+    return [max(0.0, min(1.0, (cx + l * cw) / W)),
+            max(0.0, min(1.0, (cy + t * ch) / H)),
+            max(0.0, min(1.0, (cx + r * cw) / W)),
+            max(0.0, min(1.0, (cy + b * ch) / H))]

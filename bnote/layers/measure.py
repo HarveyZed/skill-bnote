@@ -18,6 +18,13 @@ schema / vid / algo / source / params / applicability / coverage / buckets / eve
 只读媒体文件与 `cache/frames/index.json`，**不写别的文件**；产物里**不放任何时间戳**
 （两次跑必须逐字节一致，闸门直接比 sha256）。M1 也**不接进 run/slides**：只在显式
 `bnote measure` 时跑，现有产物与既有成本零变化。
+
+M3 起**按遮罩算**：存在 `cache/<vid>/overlay.json` 时，给**同一条滤镜链的最前面**每个遮挡区
+加一个 `drawbox=...:t=fill`（涂成常数），freezedetect / scdet 于是只看没被遮住的像素 ——
+"挖掉遮罩后重算"**不需要再解码一遍**（这正是 M1 把量测做成单遍链的用处）。拿不到 overlay.json
+时按**全画面**算，并在产物 applicability 里写明 masked=false + mask_source=null（不静默降级）。
+烧录字幕每秒在变，未遮罩时 freezedetect 会被切得很碎：BV1CCtz6WEvF_p1 实测未遮罩 1670 段 /
+覆盖 96.5% 时长，遮罩后段数大幅下降。
 """
 from __future__ import annotations
 
@@ -28,14 +35,18 @@ import tempfile
 import time
 from pathlib import Path
 
+from ..tools import crop_box_to_media
 from ..tools import find_ffmpeg
 from ..tools import probe_media
 
 SCHEMA = "bnote-measure/1"
 ALGO = "bnote-measure/1"
 
-APPLICABILITY_NOTE = ("未按遮罩算：烧录字幕与标注工具条每秒在变，会污染 motion 与 freezes"
-                      "（M3 之后改读 overlay.json）")
+APPLICABILITY_NOTE = ("未按遮罩算：本集没有 cache/<vid>/overlay.json，烧录字幕与标注工具条"
+                      "每秒在变，会污染 motion 与 freezes（先 bnote slides 抽帧产出遮罩，"
+                      "或直接跑 bnote overlay）")
+MASK_NOTE = ("已按遮罩算：给同一条 ffmpeg 滤镜链的最前面加 drawbox=...:t=fill，把遮挡区涂成"
+             "常数，freezedetect / scdet 只看没被遮住的像素（**没有多解码一遍**）")
 COVERAGE_NOTE = "sampling_* 才是「抽了几帧、可能漏什么」的上界；没有 frames/index.json 时为 null"
 COVERAGE_NOTE_NO_FRAMES = ("sampling_* 才是「抽了几帧、可能漏什么」的上界；本集还没有 "
                            "cache/frames/index.json（先跑 bnote slides 抽帧）")
@@ -51,6 +62,52 @@ SILENCE_START_RE = re.compile(r"silence_start:\s*(-?\d+(?:\.\d+)?)")
 SILENCE_END_RE = re.compile(r"silence_end:\s*(-?\d+(?:\.\d+)?)")
 
 # 流信息探测（含 ffprobe 不可用时的三条兜底正则）已挪到 tools.probe_media —— L4 取帧与 L4.5 量测共用一份
+
+
+def _overlay_masks(paths):
+    """读 cache/<vid>/overlay.json 里**可采信**的区域框；没有就返回 []。
+
+    **文件就是接口**（P1）：这里不 import overlay 层，只认冻结的 regions[].box 与
+    applicability 两个字段。缺文件或结构不对一律当"没有遮罩"，由 applicability 写明。
+    """
+    doc = paths.read_json(paths.overlay) or {}
+    out = []
+    for r in (doc.get("regions") or []):
+        box = r.get("box")
+        if r.get("applicability") == "ok" and isinstance(box, list) and len(box) == 4:
+            out.append([float(x) for x in box])
+    return out
+
+
+def _drawboxes(masks, cfg, media_size) -> list[str]:
+    """遮挡区 -> drawbox 参数（像素）。掩码作用在**同一条解码链**上，不额外解码。
+
+    overlay 的坐标空间是**抽帧后的画面**，量测解码的是媒体原图：`[frames].crop` 非空时
+    必须换算（tools.crop_box_to_media），否则掩码错位 —— 错位的掩码比不遮更坏。
+    """
+    if not masks or not media_size:
+        return []
+    W, H = int(media_size[0] or 0), int(media_size[1] or 0)
+    if W <= 0 or H <= 0:
+        return []
+    crop = (cfg.get("frames") or {}).get("crop") or ""
+    out = []
+    for box in masks:
+        l, t, r, b = crop_box_to_media(box, crop, (W, H))
+        x0, y0 = min(max(0, int(l * W)), W - 1), min(max(0, int(t * H)), H - 1)
+        w = min(max(1, int(round(r * W)) - x0), W - x0)
+        h = min(max(1, int(round(b * H)) - y0), H - y0)
+        out.append("drawbox=x=%d:y=%d:w=%d:h=%d:color=black:t=fill" % (x0, y0, w, h))
+    return out
+
+
+def _applicability(paths, masks) -> dict:
+    """适用性：按遮罩算还是全画面算、遮罩从哪来（M1 已有该字段，M3 才真正用起来）。"""
+    if not masks:
+        return {"masked": False, "mask_source": None, "note": APPLICABILITY_NOTE}
+    return {"masked": True,
+            "mask_source": "%s（%d 个区域）" % (_rel(paths, paths.overlay), len(masks)),
+            "note": MASK_NOTE}
 
 
 def _num(x) -> str:
@@ -70,16 +127,19 @@ def _float(raw, default: float = 0.0) -> float:
 
 # ---------------------------------------------------------------- 一次解码
 def build_command(ffmpeg: str, media_path: Path, cfg: dict, meta_file: str,
-                  has_audio: bool) -> list[str]:
+                  has_audio: bool, masks=None, media_size=None) -> list[str]:
     """视频侧 freezedetect → scdet → metadata 打点（逐帧 mafd/score），音频侧 silencedetect。
 
     `-loglevel info` 是给 silencedetect 用的：它的 silence_start/end 走日志，不走帧 metadata；
     `-nostats` 顺手关掉进度刷屏。**不加 signalstats**（占 92% 墙钟，M1 不需要）。
     """
     m = cfg["measure"]
-    vf = ("freezedetect=n=%sdB:d=%s,scdet=threshold=%s,metadata=print:file=%s"
-          % (_num(m["freeze_noise_db"]), _num(m["freeze_min_sec"]),
-             _num(m["scdet_threshold"]), meta_file))
+    chain = _drawboxes(masks, cfg, media_size)          # 遮罩在这一步就位，链路不变长
+    chain.append("freezedetect=n=%sdB:d=%s" % (_num(m["freeze_noise_db"]),
+                                               _num(m["freeze_min_sec"])))
+    chain.append("scdet=threshold=%s" % _num(m["scdet_threshold"]))
+    chain.append("metadata=print:file=%s" % meta_file)
+    vf = ",".join(chain)
     cmd = [ffmpeg, "-hide_banner", "-nostdin", "-nostats", "-loglevel", "info",
            "-i", str(media_path), "-vf", vf]
     if has_audio:
@@ -210,9 +270,17 @@ def analyze(cfg: dict, paths, media_path: Path) -> dict:
         raise SystemExit("[measure] %s 没有视频轨：量测需要画面（口播/播客类请走 bnote stream）"
                          % media_path.name)
     ffmpeg = find_ffmpeg(cfg)
+    masks = _overlay_masks(paths)
+    media_size = (info["width"], info["height"])
+    if masks:
+        print("[measure] 按遮罩算：%d 个区域来自 %s → drawbox 涂掉后再 freezedetect/scdet"
+              % (len(masks), _rel(paths, paths.overlay)))
+    else:
+        print("[measure] 未按遮罩算（没有 cache/<vid>/overlay.json）：全画面参与 motion/freeze")
     with tempfile.TemporaryDirectory(prefix="bnote-measure-") as td:
         meta_file = str(Path(td) / "meta.txt")
-        cmd = build_command(ffmpeg, media_path, cfg, meta_file, info["has_audio"])
+        cmd = build_command(ffmpeg, media_path, cfg, meta_file, info["has_audio"],
+                            masks=masks, media_size=media_size)
         proc = subprocess.run(cmd, capture_output=True, text=True,
                               encoding="utf-8", errors="replace")
         if proc.returncode != 0:
@@ -257,7 +325,7 @@ def analyze(cfg: dict, paths, media_path: Path) -> dict:
                    "freeze_min_sec": m["freeze_min_sec"],
                    "silence_noise_db": m["silence_noise_db"],
                    "silence_min_sec": m["silence_min_sec"]},
-        "applicability": {"masked": False, "mask_source": None, "note": APPLICABILITY_NOTE},
+        "applicability": _applicability(paths, masks),
         "coverage": {"decode_frames": len(frames),
                      "decode_max_gap_sec": decode_gap,
                      "sampled_frames": sampled,
