@@ -1,6 +1,7 @@
 """L4.5 量测层（M1，零 token）：一次 ffmpeg 解码 → 逐秒桶 + 事件。
 
-产物 `cache/<vid>/measure.json`（接口冻结，完整 schema 见 VISION-PLAN §3.2）：
+产物 `cache/<vid>/measure.json`（**接口冻结**，键序即结构：
+schema / vid / algo / source / params / applicability / coverage / buckets / events / stats）：
 
   * `source`      —— 媒体 basename + 时长/帧率/分辨率/有无音轨；
   * `buckets[s]`  —— 该秒的 `lavfi.scd.mafd` 均值与最大值、`lavfi.scd.score` 最大值、解到的帧数；
