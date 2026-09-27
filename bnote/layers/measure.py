@@ -356,11 +356,13 @@ def summary_line(doc: dict, elapsed: float, dest: str) -> str:
     cov = doc.get("coverage") or {}
     ev = doc.get("events") or {}
     stats = doc.get("stats") or {}
+    gap = cov.get("sampling_max_gap_sec")
+    gap_txt = "%ss" % gap if gap is not None else "无（缺 frames/index.json）"
     return ("[measure] %ss / %d 桶 / %d 帧 | cuts %d · freezes %d · silences %d | "
-            "解码最大间隔 %ss ／ 抽帧采样上界 %ss | %.1fs → %s"
+            "解码最大间隔 %ss ／ 抽帧采样上界 %s | %.1fs → %s"
             % (src.get("duration"), cov.get("buckets"), cov.get("decode_frames"),
                stats.get("cut_count"), len(ev.get("freezes") or []), len(ev.get("silences") or []),
-               cov.get("decode_max_gap_sec"), cov.get("sampling_max_gap_sec"), elapsed, dest))
+               cov.get("decode_max_gap_sec"), gap_txt, elapsed, dest))
 
 
 def run(cfg: dict, paths, media_path: Path, force: bool = False) -> dict:
