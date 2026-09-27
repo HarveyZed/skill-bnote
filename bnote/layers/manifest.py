@@ -29,6 +29,7 @@ import shutil
 import time
 from pathlib import Path
 
+from . import refs as refs_layer
 from . import slideset as slideset_layer
 
 FENCE = chr(96) * 3
@@ -40,7 +41,7 @@ META_BEGIN = "<!-- meta:begin -->"
 META_END = "<!-- meta:end -->"
 # 就地标注：给"读者需要看到的推断与存疑"用的固定标记（引用块，紧跟相关段落之后，不打断阅读）
 ANNOT_MARK = "**【校对】**"
-IMG_RE = re.compile(r"!\[([^\]]*)\]\((?:\.\./)?slides/(\d{4})\.jpg\)")
+# 图引用白名单不在这里定义：唯一入口是 layers/refs.py（manifest / body / merge / remap 同源）
 
 
 def path_of(paths) -> Path:
@@ -174,6 +175,18 @@ def _err(msg: str, owner: str = "manifest", chapter: str | None = None,
 def _warn(msg: str, owner: str = "manifest", chapter: str | None = None,
           file: str | None = None, fix: str | None = None) -> dict:
     return _item("warning", msg, owner, chapter, file, fix)
+
+
+def _panel_names(paths) -> set:
+    """_meta/sheet.json 里有 tile 的面板文件名集合（没有产物时为空集）。
+
+    正文引用的读字面板必须在这里查得到 —— 否则读者拿到一张谁也不能解释的图
+    （面板只作索引，权威映射只在 sheet.json，见 layers/refs.py 与 body-contract）。
+    """
+    doc = paths.read_json(paths.meta_dir() / "sheet.json", None)
+    if not isinstance(doc, dict):
+        return set()
+    return {str(t.get("sheet")) for t in (doc.get("tiles") or []) if isinstance(t, dict)}
 
 
 def _short_sid(s: str) -> str:
@@ -334,14 +347,36 @@ def validate(manifest: dict | None, paths, meta: dict, transcript: dict | None,
             if META_BEGIN in text:
                 errors.append(_err("正文不应包含 meta 区块（复核信息放 manifest 字段）", "chapter:%s" % cid,
                                    cid, str(ch.get("body")), fix="该章写作 agent 把片段移入 manifest 字段"))
-            refs = [int(m.group(2)) for m in IMG_RE.finditer(text)]
-            if not refs:
+            # 图引用一律走白名单（layers/refs.py 是唯一定义处）：slides 主图 + sheet 读字面板
+            img_refs = refs_layer.iter_refs(text)
+            pages = [r.page for r in img_refs if r.kind == "slides"]
+            if not pages:
                 errors.append(_err("正文没有引用任何 slide 图", "chapter:%s" % cid, cid, str(ch.get("body"))))
-            for n in refs:
-                used_slides.add(n)
-                if not (paths.out / "slides" / ("%04d.jpg" % n)).exists():
-                    errors.append(_err("引用了不存在的图 slides/%04d.jpg" % n, "pipeline", cid,
+            for r in img_refs:
+                if r.kind != "slides":
+                    continue
+                used_slides.add(r.page)
+                if not refs_layer.ref_out_path(paths.out, r.kind, r.name).exists():
+                    errors.append(_err("引用了不存在的图 slides/%04d.jpg" % r.page, "pipeline", cid,
                                        fix="多半是重切片后未跑 bnote remap，或 bundle 未刷新 slides/"))
+            # 白名单之外：报出来而不是静默放行（merge 不改写它们，讲义里就是坏图）
+            for target in refs_layer.unknown_targets(text):
+                errors.append(_err("图片引用不在两类白名单内：%s（只认 ../slides/NNNN.jpg 与 "
+                                   "../_meta/sheets/<name>.png）" % target, "chapter:%s" % cid, cid,
+                                   str(ch.get("body")),
+                                   fix="按契约改成 ../slides/NNNN.jpg（页号 4 位）；读字面板放 "
+                                       "_meta/sheets/ 并由 bnote sheet 生成"))
+            # 面板引用：必须在 sheet.json 里有对应 tile（否则没人能解释这张图）
+            panels = [r for r in img_refs if r.kind == "sheet"]
+            if panels:
+                known = _panel_names(paths)
+                for r in panels:
+                    if r.name not in known:
+                        errors.append(_err("正文引用了读字面板 %s，但 _meta/sheet.json 里没有它的 tile"
+                                           % refs_layer.ref_body_path(r.kind, r.name),
+                                           "chapter:%s" % cid, cid, str(ch.get("body")),
+                                           fix="跑 bnote sheet 生成面板（行列→帧→t 的映射只在 sheet.json），"
+                                               "或删掉这条引用"))
             need, ctx = _reader_flags(ch)
             have = text.count(ANNOT_MARK)
             if need > have:

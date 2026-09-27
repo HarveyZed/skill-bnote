@@ -9,13 +9,13 @@
 from __future__ import annotations
 
 import json
-import re
 import time
 from pathlib import Path
 
+from . import refs as refs_layer
 from . import slideset as slideset_layer
 
-IMG = re.compile(r"\.\./slides/(\d{4})\.jpg")
+# 图引用统一走白名单（layers/refs.py）：remap 只重编号 **slides 一类**，面板引用不参与
 
 
 def _short(s) -> str:
@@ -83,15 +83,17 @@ def run(cfg, paths, prev_slides: Path, dry: bool = False, force: bool = False) -
         text = f.read_text(encoding="utf-8")
         hits = []
 
-        def sub(m):
-            old_id = int(m.group(1))
+        def sub(r):
+            if r.kind != "slides":
+                return None
+            old_id = r.page
             new_id = mapping.get(old_id)
             if new_id is None or new_id == old_id:
-                return m.group(0)
+                return None
             hits.append((old_id, new_id))
-            return "../slides/%04d.jpg" % new_id
+            return r.prefix + refs_layer.ref_relpath(r.kind, new_id)
 
-        new_text = IMG.sub(sub, text)
+        new_text = refs_layer.sub_path(text, sub)
         if hits:
             changed[f.name] = hits
             if not dry:
@@ -146,8 +148,8 @@ def run(cfg, paths, prev_slides: Path, dry: bool = False, force: bool = False) -
     # 覆盖性提示
     used = set()
     for f in sorted(paths.chapters().glob("0*.md")):
-        for m in IMG.finditer(f.read_text(encoding="utf-8")):
-            used.add(int(m.group(1)))
+        for r in refs_layer.iter_refs(f.read_text(encoding="utf-8"), kind="slides"):
+            used.add(r.page)
     all_ids = {n["id"] for n in new}
     print("[remap] 未被引用：%s ｜ 引用但不存在：%s" % (
         sorted(all_ids - used) or "无", sorted(i for i in used if i not in all_ids) or "无"))

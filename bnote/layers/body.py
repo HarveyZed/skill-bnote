@@ -16,10 +16,12 @@ import json
 import re
 from pathlib import Path
 
+from . import refs as refs_layer
+
 TIME_RE = re.compile(r"(\d{1,2}):(\d{2})(?::(\d{2}))?\s*[–\-—~]\s*(\d{1,2}):(\d{2})(?::(\d{2}))?")
 SLIDES_RE = re.compile(r"slide[s]?\s*[:：]?\s*((?:\d{3,4})(?:\s*[,，]\s*\d{3,4})*)", re.I)
 ITALIC_RE = re.compile(r"^\s*\*[^*].*\*\s*$")
-IMG_RE = re.compile(r"!\[[^\]]*\]\((?:\.\./)?slides/(\d{3,4})\.jpg\)")
+# 图引用统一走白名单（layers/refs.py）；这里只关心 slides 一类（多图小节的时间行按 slide 归属）
 HEAD_RE = re.compile(r"^(##)\s+(.+?)\s*$")
 
 
@@ -68,8 +70,8 @@ def parse_sections(text: str) -> list[dict]:
                 break
             if l.strip():
                 break
-        imgs = [(i + 1 + j, int(m.group(1)))
-                for j, l in enumerate(body) for m in [IMG_RE.search(l)] if m]
+        imgs = [(i + 1 + j, r.page)
+                for j, l in enumerate(body) for r in [refs_layer.search(l, kind="slides")] if r]
         sections.append({
             "title": head,
             "head_idx": i,
@@ -251,7 +253,7 @@ def retime(man: dict, paths, cfg: dict, only: list[str] | None = None) -> list[s
         def _chars_of(s):
             seg = blines[s["head_idx"] + 1:s["end_idx"]]
             return sum(len(l) for l in seg
-                       if l.strip() and not IMG_RE.search(l) and not ITALIC_RE.match(l))
+                       if l.strip() and not refs_layer.search(l) and not ITALIC_RE.match(l))
 
         spans = [None] * n
         estimated = []

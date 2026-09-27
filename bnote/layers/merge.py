@@ -15,10 +15,10 @@ import time
 from pathlib import Path
 
 from . import manifest as manifest_layer
+from . import refs as refs_layer
 
 FENCE = chr(96) * 3
 NL = chr(10)
-IMG_ANY = re.compile(r"!\[([^\]]*)\]\((?:\.\./)?slides/([^)]+)\)")
 HEADING = re.compile(r"^#{1,5}\s")
 
 
@@ -174,7 +174,12 @@ def build(cfg, paths, meta: dict, seg_data: dict, transcript: dict | None = None
         body += ["## %d. %s" % (i, ch["title"]), "", "*%s–%s ｜ slide %s*" % (_mmss(a), _mmss(b), sl), ""]
         body.append(_demote((paths.chapters() / ch["body"]).read_text(encoding="utf-8").strip()))
         body.append(NL + "---" + NL)
-    merged = IMG_ANY.sub(lambda m: "![%s](slides/%s)" % (m.group(1), m.group(2)), NL.join(head) + NL.join(body))
+    def _normalize(r):
+        """讲义在 out/<vid>/ 下：正文的 ../slides/x 落成 slides/x。
+        面板引用**原样保留**（§3.3：merge 只重写 slides 一类，面板是材料、不进讲义的图）。"""
+        return refs_layer.ref_relpath(r.kind, r.name) if r.kind == "slides" else None
+
+    merged = refs_layer.sub_path(NL.join(head) + NL.join(body), _normalize)
 
     p1 = out / mc.get("filename", "lecture.md")
     p1.write_text(merged, encoding="utf-8")
@@ -182,13 +187,16 @@ def build(cfg, paths, meta: dict, seg_data: dict, transcript: dict | None = None
               "errors": [], "warns": warns}
     print("[merge] 纯讲义 → %s (%.0f KB)" % (p1, p1.stat().st_size / 1024))
     if mc.get("standalone", True):
-        def embed(m):
-            p = out / "slides" / m.group(2)
+        def embed(r):
+            # 只有主图内嵌；面板引用按上面的口径原样留着（它是索引，不是讲义的图）
+            if r.kind != "slides":
+                return None
+            p = refs_layer.ref_out_path(out, r.kind, r.name)
             if not p.exists():
-                return m.group(0)
-            return "![%s](data:image/jpeg;base64,%s)" % (m.group(1), base64.b64encode(p.read_bytes()).decode("ascii"))
+                return None
+            return "![%s](data:image/jpeg;base64,%s)" % (r.alt, base64.b64encode(p.read_bytes()).decode("ascii"))
         p2 = out / mc.get("standalone_filename", "lecture.standalone.md")
-        p2.write_text(IMG_ANY.sub(embed, merged), encoding="utf-8")
+        p2.write_text(refs_layer.sub(merged, embed), encoding="utf-8")
         result["standalone"] = str(p2)
         print("[merge] 自包含版 → %s (%.0f KB)" % (p2, p2.stat().st_size / 1024))
     return result
