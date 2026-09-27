@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import json
 import shutil
 import time
 from pathlib import Path
@@ -109,8 +110,6 @@ def build(cfg: dict, paths, meta: dict, transcript: dict, seg_data: dict) -> dic
             old_doc = json.loads(old_json.read_text(encoding="utf-8"))
         except Exception:
             old_doc = None
-        new_doc = {"vid": paths.vid, "strategy": seg_data.get("strategy"),
-                   "count": len(slides), "slides": slides}
         # 无条件保留上一版（不比较差异）——比较逻辑一旦有边角情况就会"该快照时没快照"，
         # 而 remap 恰恰只在页序变了的时候才需要它。宁可多留一份，也不要丢对照源。
         if old_doc:
