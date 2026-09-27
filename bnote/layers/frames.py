@@ -13,6 +13,7 @@ from pathlib import Path
 from ..tools import find_ffmpeg
 
 from . import media as media_layer
+from . import measure as measure_layer
 from . import slideset as slideset_layer
 
 
@@ -102,7 +103,7 @@ def extract(cfg: dict, paths, media_path: Path, force: bool = False) -> list[dic
 
 
 # ---------------------------------------------------------------- M2 按时间取帧（bnote frames --at/--read）
-AT_DIRNAME = "frames_at"     # cache/frames/ 被清掉时的现抽落脚点：out/<vid>/_meta/frames_at/
+AT_DIRNAME = "frames_at"     # 现抽原生帧的落脚点：out/<vid>/_meta/frames_at/
 
 
 def _rel(paths, path) -> str:
@@ -110,6 +111,37 @@ def _rel(paths, path) -> str:
         return str(Path(path).relative_to(paths.root))
     except ValueError:
         return str(path)
+
+
+def _size_txt(size) -> str:
+    return ("%dx%d" % (size[0], size[1])) if size else "尺寸未知"
+
+
+def _img_size(path):
+    """图片尺寸（只读文件头，不解码全图）；读不出来返回 None。"""
+    try:
+        from PIL import Image
+        with Image.open(path) as im:
+            return (int(im.size[0]), int(im.size[1]))
+    except Exception:
+        return None
+
+
+def native_size(cfg: dict, paths, media=None):
+    """媒体**原生**尺寸 (宽, 高)；媒体不在或探测失败返回 None。
+
+    复用 measure.probe_source（ffprobe 优先、没有就解析 ffmpeg -i 的 stderr）：媒体尺寸只有一个
+    真源，再实现一份探测会与那套兜底逻辑漂移。
+    """
+    media = media if media is not None else media_layer.find_media(paths)
+    if media is None:
+        return None
+    try:
+        info = measure_layer.probe_source(cfg, media)
+    except Exception:
+        return None
+    w, h = int(info.get("width") or 0), int(info.get("height") or 0)
+    return (w, h) if w and h else None
 
 
 def pick_index(frames: list, t: float) -> int:
@@ -135,35 +167,79 @@ def _step(cfg: dict, frames: list) -> float:
         return 0.5
 
 
-def extract_at(cfg: dict, paths, t: float) -> dict:
-    """现抽一张：ffmpeg -ss <t> -i <media> -frames:v 1 → out/<vid>/_meta/frames_at/。
+def extract_native(cfg: dict, paths, t: float, native=None, media=None) -> dict:
+    """现抽一张**原生分辨率**单帧：`ffmpeg -ss <t> -i <media> -frames:v 1` → _meta/frames_at/。
 
-    **不缩放**（要读字就得全分辨率）。ffmpeg 会重编码，所以这张与 cache/frames/ 里那张**不逐字节相同**；
+    为什么不缩放、为什么 PNG：这条路径的用途是**读字**（小字 / 烧录字幕 / 页脚），缩放等于丢像素，
+    有损编码等于给字加噪声。落盘名带 t 与原生尺寸，同一时刻第二次跑直接复用、**不再解码**。
     媒体也没有时明确报错，**不许静默返回空**。
     """
-    media = media_layer.find_media(paths)
+    media = media if media is not None else media_layer.find_media(paths)
     if media is None:
         raise SystemExit(
-            "既没有 cache/frames/index.json 里可用的帧，也没有媒体文件可现抽帧：\n"
+            "既没有 cache/frames/ 里可用的帧，也没有媒体文件可现抽原生帧：\n"
             "  帧目录：%s\n  媒体目录：%s\n"
             "  → 先跑 bnote fetch（或 bnote run）把媒体取下来" % (paths.frames, paths.media))
+    if native is None:
+        native = native_size(cfg, paths, media)
+    tag = ("%dx%d" % (native[0], native[1])) if native else "unknown"
     dest_dir = paths.meta_dir() / AT_DIRNAME
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    dest = dest_dir / ("at_%09.3f.jpg" % float(t))
-    ff = find_ffmpeg(cfg)
-    cmd = [ff, "-y", "-hide_banner", "-loglevel", "error", "-ss", "%.3f" % float(t),
-           "-i", str(media), "-frames:v", "1",
-           "-q:v", str(cfg["frames"]["jpg_quality"]), str(dest)]
-    print("[frames] cache/frames/ 里没有可用的帧 → 现抽一张：%s" % " ".join(cmd))
-    subprocess.run(cmd, check=True)
-    if not dest.exists():
-        raise SystemExit("ffmpeg 没有产出帧文件：%s（先看它上面的报错）" % dest)
+    dest_dir.mkdir(parents=True, exist_ok=True)          # 只建自己要写的那一层
+    dest = dest_dir / ("at_%09.3f_%s.png" % (float(t), tag))
+    hit = dest.exists()
+    if not hit:
+        ff = find_ffmpeg(cfg)
+        cmd = [ff, "-y", "-hide_banner", "-loglevel", "error", "-ss", "%.3f" % float(t),
+               "-i", str(media), "-frames:v", "1", str(dest)]
+        print("[frames] 现抽原生帧（无 scale 滤镜、PNG 无损）：%s" % " ".join(cmd))
+        subprocess.run(cmd, check=True)
+        if not dest.exists():
+            raise SystemExit("ffmpeg 没有产出帧文件：%s（先看它上面的报错）" % dest)
     return {"t": round(float(t), 3), "path": dest, "frame": None, "extracted": True,
+            "size": _img_size(dest), "reused": hit,
+            "source": "原生现抽（PNG 无损%s）"
+                      % ("；该时刻的现抽结果已缓存，未重新解码" if hit else ""),
             "sha256": slideset_layer.sha256_file(dest)}
 
 
+def read_frame(cfg: dict, paths, t: float) -> dict:
+    """`--read`：t 处那一帧，**默认给媒体原生分辨率**（读字用途）。
+
+    三条分支都会被打印出来（尺寸 + 来源），不让调用者猜自己拿到的是哪一档：
+      ① 缓存帧本身就是原生尺寸（scale_height=0，或媒体尺寸 <= scale_height）→ **直接复用缓存**，
+         sha256 与 cache/frames/ 那张相同 —— 「没有缩放/重编码」这条性质仍然可验证；
+      ② 缓存帧是缩放图（如 scale_height=720 而媒体 1080p）→ 现抽原生帧（PNG 无损），按 t+尺寸缓存；
+      ③ 媒体已清理、无法确认原生尺寸 → 复用缓存**并明确警告**（不静默把缩放图当原生）。
+    """
+    frames = load_index(paths) or []
+    f = frames[pick_index(frames, t)] if frames else None
+    cached = (paths.frames / str(f["file"])) if f is not None else None
+    media = media_layer.find_media(paths)
+    native = native_size(cfg, paths, media)
+    if cached is not None and cached.exists():
+        size = _img_size(cached)
+        if native is None:
+            scaled = int(((cfg.get("frames") or {}).get("scale_height") or 0)) > 0
+            return {"t": round(float(f["t"]), 3), "path": cached, "frame": str(f["file"]),
+                    "extracted": False, "size": size, "reused": True,
+                    "source": "缓存复用（%s）" % ("scale_height=0，未缩放" if not scaled
+                                                 else "媒体已清理，无法确认原生尺寸"),
+                    "warn": None if not scaled else
+                            "媒体已清理，取不到原生分辨率；要读小字请先 bnote fetch 取回媒体",
+                    "sha256": slideset_layer.sha256_file(cached)}
+        if size == native:
+            return {"t": round(float(f["t"]), 3), "path": cached, "frame": str(f["file"]),
+                    "extracted": False, "size": size, "reused": True, "warn": None,
+                    "source": "缓存复用（已是原生 %dx%d，与 cache/frames/ 逐字节相同）"
+                              % (native[0], native[1]),
+                    "sha256": slideset_layer.sha256_file(cached)}
+        print("[frames] cache/frames/%s 是 %s 的缩放图（媒体原生 %s）→ 现抽原生帧"
+              % (f["file"], _size_txt(size), _size_txt(native)))
+    return extract_native(cfg, paths, t, native=native, media=media)
+
+
 def entry(cfg: dict, paths, t: float, frames: list | None = None) -> dict:
-    """t 处那一帧：index 命中就用现成 jpg（**逐字节就是它**），否则现抽一张。"""
+    """`--at` 列表用：index 命中就用现成 jpg（**逐字节就是它**），否则现抽一张原生 PNG。"""
     if frames is None:
         frames = load_index(paths) or []
     if frames:
@@ -171,13 +247,14 @@ def entry(cfg: dict, paths, t: float, frames: list | None = None) -> dict:
         p = paths.frames / str(f["file"])
         if p.exists():
             return {"t": round(float(f["t"]), 3), "path": p, "frame": str(f["file"]),
-                    "extracted": False, "sha256": slideset_layer.sha256_file(p)}
+                    "extracted": False, "size": _img_size(p), "reused": True, "warn": None,
+                    "source": "缓存（cache/frames/）", "sha256": slideset_layer.sha256_file(p)}
         print("[frames] cache/frames/%s 不在（被 clean 过？）→ 现抽" % f["file"])
-    return extract_at(cfg, paths, t)
+    return extract_native(cfg, paths, t)
 
 
-def around(cfg: dict, paths, t: float) -> list[tuple[int, dict]]:
-    """该时刻最近的一帧 + 前后各一帧（3 条，含路径与 t）。没有 index 时按抽帧间隔现抽三张。"""
+def around(cfg: dict, paths, t: float):
+    """该时刻最近的一帧 + 前后各一帧（3 条，含路径、t、尺寸与来源）。没有 index 时按抽帧间隔现抽三张。"""
     frames = load_index(paths) or []
     if not frames:
         step = _step(cfg, frames)
@@ -191,7 +268,11 @@ def around(cfg: dict, paths, t: float) -> list[tuple[int, dict]]:
 
 
 def run_at(cfg: dict, paths, hms: str, read: bool = False) -> dict:
-    """bnote frames 的入口：--at 打印 3 条；--read 额外给该时刻的全分辨率单帧路径。"""
+    """bnote frames 的入口：`--at` 打印 3 条（含尺寸与来源）；`--read` 给该时刻的**读字单帧**。
+
+    `--read` 默认就是**媒体原生分辨率**（这条路径的用途就是读字），所以不另加 `--native` 开关：
+    多一个开关只会让人以为"默认不是原生"。
+    """
     off = section_offset(cfg)
     t = to_timeline(cfg, hms)
     if off:
@@ -203,19 +284,20 @@ def run_at(cfg: dict, paths, hms: str, read: bool = False) -> dict:
     print("[frames] --at %s（原始时间轴 %.3fs）最近的帧 + 前后各一帧：" % (hms, t))
     tags = {-1: "← prev", 0: "● hit ", 1: "→ next"}
     for d, it in items:
-        print("  %s  t=%.3fs  %s%s" % (tags[d], it["t"], _rel(paths, it["path"]),
-              "（现抽）" if it["extracted"] else ""))
+        print("  %s  t=%.3fs  %s  %s  %s" % (tags[d], it["t"], _size_txt(it.get("size")),
+                                             it.get("source") or "", _rel(paths, it["path"])))
     hit = next(it for d, it in items if d == 0)
-    if read:
-        print("[frames] --read 全分辨率单帧：%s" % _rel(paths, hit["path"]))
-        if hit["extracted"]:
-            print("[frames] sha256 %s ｜ 现抽帧（ffmpeg 重编码，不缩放）：cache/frames/ 里没有对应文件，"
-                  "读字以这张为准" % hit["sha256"])
-        else:
-            src = paths.frames / str(hit["frame"])
-            same = hit["sha256"] == slideset_layer.sha256_file(src)
-            print("[frames] sha256 %s ｜ 与 cache/frames/%s %s"
-                  % (hit["sha256"], hit["frame"],
-                     "逐字节相同（未缩放、未重编码）" if same
-                     else "不一致（缓存被动过，重跑 bnote slides）"))
-    return hit
+    if not read:
+        return hit
+    frame = read_frame(cfg, paths, t)
+    print("[frames] --read 读字单帧：%s ｜ %s ｜ 来源：%s"
+          % (_rel(paths, frame["path"]), _size_txt(frame.get("size")), frame.get("source")))
+    print("[frames] sha256 %s" % frame["sha256"])
+    if frame.get("frame"):
+        same = frame["sha256"] == slideset_layer.sha256_file(paths.frames / str(frame["frame"]))
+        print("[frames] 与 cache/frames/%s %s"
+              % (frame["frame"], "逐字节相同（未缩放、未重编码）" if same
+                 else "不一致（缓存被动过，重跑 bnote slides）"))
+    if frame.get("warn"):
+        print("[frames] ⚠ %s" % frame["warn"])
+    return frame

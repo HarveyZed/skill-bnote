@@ -134,9 +134,11 @@ sheet      M2 读字面板：把若干帧拼成一张**只烧序号**的索引�
            （每格只烧序号、**不烧时间码**；行列→帧→t 的权威映射只在 sheet.json；面板里的字**一律不采信**，
            读字请用 frames --read。--from/--to 给时间区间、--max 给格数上限，不指定就从 cache/frames/ 均匀取样；
            空白格按标准差跳过、不占序号；拼版只用已有 Pillow+numpy。**只在显式调用时跑**）
-frames     M2 按时间取帧：--at HH:MM:SS 给该时刻最近的一帧 + 前后各一帧（3 条，含路径与 t）；
-           --read 给该时刻的全分辨率单帧路径（命中缓存时就是 cache/frames/ 里那张 jpg，逐字节相同）。
-           cache/frames/ 被 clean 掉时用 ffmpeg 现抽一张到 _meta/frames_at/，媒体也没有就明确报错
+frames     M2 按时间取帧：--at HH:MM:SS 给该时刻最近的一帧 + 前后各一帧（3 条，含路径、t、实际尺寸与来源）；
+           --read 给该时刻的**读字单帧**，默认**媒体原生分辨率**：缓存帧本身已是原生尺寸就直接复用它
+           （sha256 与 cache/frames 那张逐字节相同），否则用 ffmpeg 现抽原生帧（PNG 无损、无 scale 滤镜）到
+           _meta/frames_at/，并按「t + 原生尺寸」缓存复用（第二次不重新解码）；两种情形都打印实际尺寸与来源。
+           cache/frames/ 被 clean 掉也照样现抽；媒体也没有就明确报错，不静默返回空
 scaffold   生成章节结构（manifest + _plan）；分章是语义判断：给 --groups，或显式 --auto 接受一页一章（--no-leading-merge：封面不与目录合并）
 brief      渲染派单 prompt：--stage chapter|note|fix|review；chapter 阶段同时把**派单时刻**的切片指纹记进 _meta/slideset_dispatch.json（只记本次实际派发的章）
 glossary   查看/修改/确认术语表（未确认时 brief --stage chapter 会拒绝派发）
