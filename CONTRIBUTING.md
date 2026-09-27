@@ -47,6 +47,12 @@ scripts/               入口（bnote）、环境准备（setup-env.sh）、文�
 - 主版本 = 产物结构不兼容；次版本 = 新增能力或流程；修订号 = 修 bug 与调参；
 - `bash scripts/install-skill.sh --deploy-local` 会把整目录同步到 `$DSH_HOME/skills/bnote`（DSH 专属路径，其它 harness 复制到自己的 skill 根目录即可）。
 
+## 第三方代码与致谢
+
+- **只借鉴做法、不搬代码**：不必附许可证，但要在 README「致谢」里给出处与一句话说明（例：画面理解那三条做法来自 video-watch-skill）。
+- **一旦复制或改编了第三方代码**（哪怕只有几十行）：① 在文件头写明来源与许可证；② 按其许可证附版权声明（MIT 需保留原始版权与许可全文，可放 `THIRD_PARTY_NOTICES.md`）；③ 在 README「致谢」里列出。
+- **新增运行依赖**同样要写进 README 的依赖一节；可选依赖不进安装前置（见 SKILL.md）。
+
 ## 反馈
 
 缺陷与需求走 [Issues](https://github.com/HarveyZed/skill-bnote/issues)。提 issue 时请附：复现命令、`bnote config --paths` 的输出、以及 `<数据根>/out/<vid>/_meta/` 下 `validation.json` 的相关片段；**贴之前先去掉本机路径与个人信息**。

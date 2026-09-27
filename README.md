@@ -133,5 +133,6 @@ scripts/bnote stream <URL> --page 1 --assemble
 - [imageio-ffmpeg](https://github.com/imageio/imageio-ffmpeg)：兜底的 ffmpeg 静态包
 - [RapidOCR](https://github.com/RapidAI/RapidOCR)：页面文字识别
 - [faster-whisper](https://github.com/SYSTRAN/faster-whisper)：本地语音识别
+- [video-watch-skill](https://github.com/CFITCorporation/video-watch-skill)（MIT）：**读字面板、采样盲区可核算、索引与时间映射分离**这三条**做法**启发了本项目的画面理解（`bnote measure` 的采样盲区上界、`bnote sheet` 的读字面板与 `--read` 取原生分辨率单帧）；本项目按自身链路用**已有 Pillow + numpy 自实现**（未引入 ImageMagick），**未使用其代码**
 
 以及 B 站接口社区的公开文档与讨论。
