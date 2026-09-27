@@ -403,8 +403,15 @@ def cmd_collect(args):
         print("[collect] 已合并 %s" % a)
     for s in res["skipped"]:
         print("[collect] 跳过 %s" % s)
-    if not res["applied"]:
-        print("[collect] 没有可合并的补丁（_meta/patch/*.json）")
+    ss = res.get("slideset")
+    if ss:
+        print("[collect] 切片指纹已搬进 manifest：%s（派单时刻 %s，本次派发 %d 章%s）"
+              % (ss["id"], ss.get("at"), len(ss.get("chapters") or []),
+                 "" if ss.get("whole") else "，未覆盖全部章 → 顶层汇总保持不变"))
+        if ss.get("cleared_remap"):
+            print("[collect] 已清除 slideset_remap 待办（写手已按当前切片重新派单）")
+    if not res["applied"] and not ss:
+        print("[collect] 没有可合并的补丁（_meta/patch/*.json），也没有待搬运的切片指纹")
     return 0
 
 

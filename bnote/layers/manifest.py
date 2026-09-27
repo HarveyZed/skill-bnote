@@ -29,6 +29,8 @@ import shutil
 import time
 from pathlib import Path
 
+from . import slideset as slideset_layer
+
 FENCE = chr(96) * 3
 NL = chr(10)
 SCHEMA = "bnote-chapters/1"
@@ -383,10 +385,57 @@ def write_validation(paths, errors: list, warns: list, review: list | None = Non
     return doc
 
 
+def _stamp_slideset(paths, man: dict) -> dict | None:
+    """把派单台账里最近一条记录搬进 manifest：**每章** slideset_id + 顶层汇总。
+
+    只有 `brief --stage chapter` 会往台账里记（scaffold 不盖章——它能独立重跑，盖章会把
+    真实漂移洗掉）。这里**只搬运、不自行取值**：collect 在写作之后才跑，「写手此刻看到的是
+    哪一版图」只有派单那一刻知道。
+
+    顶层（整集口径）只在**本次派单覆盖 manifest 全部章**时刷新，或 manifest 还没有顶层指纹时
+    首次落值；否则部分派单会把「其余章仍写在旧版切片上」这件事在顶层洗掉。
+    返回本次搬运的摘要（供 cli 打印）；没有台账记录时返回 None。
+    """
+    rec = slideset_layer.last_record(paths)
+    if rec is None:
+        return None
+    sid = str(rec.get("slideset_id") or "")
+    if not sid:
+        return None
+    stamped = {str(x) for x in (rec.get("chapters") or [])}
+    ids = [str(c.get("id")) for c in man.get("chapters") or []]
+    hit = [cid for cid in ids if cid in stamped]
+    whole = bool(ids) and len(hit) == len(ids)
+    changed = 0
+    for ch in man.get("chapters") or []:
+        if str(ch.get("id")) in stamped:
+            if ch.get("slideset_id") != sid:
+                changed += 1
+            ch["slideset_id"] = sid
+    top_updated = False
+    if whole or not man.get("slideset_id"):
+        top_updated = man.get("slideset_id") != sid
+        man["slideset_id"] = sid
+        man["slideset_algo"] = rec.get("algo") or slideset_layer.ALGO
+        man["slideset_at"] = rec.get("at")
+        man["slideset_count"] = rec.get("count")
+    # remap 的「图注待复核」标记是待办：写手已按**当前**切片重新派单并 collect → 清掉
+    cleared = False
+    rm = man.get("slideset_remap")
+    if isinstance(rm, dict) and str(rec.get("at") or "") > str(rm.get("at") or ""):
+        if slideset_layer.current_id(paths.out) == sid:
+            man.pop("slideset_remap", None)
+            cleared = True
+    return {"id": sid, "at": rec.get("at"), "chapters": hit, "whole": whole,
+            "changed": changed, "top_updated": top_updated, "cleared_remap": cleared}
+
+
 def collect(cfg, paths) -> dict:
     """把 _meta/patch/<章号>.json 汇总进 manifest（替代多 writer 并发写同一文件）。
 
     写手各自只写自己那章的补丁文件，编排者跑本命令汇总 —— 层与层只通过文件通信，且不丢更新。
+    0b 起还负责**搬运切片指纹**（派单台账 → manifest 的每章 + 顶层）；因此写盘条件从
+    「有补丁」放宽成「有补丁**或**有指纹搬运」——否则"没有补丁"这条常见路径会把指纹吞掉。
     """
     man = load(paths)
     if man is None:
@@ -412,6 +461,7 @@ def collect(cfg, paths) -> dict:
                     ch[k] = doc[k]
                     n += 1
             applied.append("%s←%s" % (cid, n))
-    if applied:
+    stamped = _stamp_slideset(paths, man)
+    if applied or stamped:
         write(paths, man)
-    return {"applied": applied, "skipped": skipped}
+    return {"applied": applied, "skipped": skipped, "slideset": stamped}

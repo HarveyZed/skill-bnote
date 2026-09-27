@@ -11,12 +11,14 @@ v0.7.0 起：
 """
 from __future__ import annotations
 
+import re
 import time
 from pathlib import Path
 
 from . import manifest as manifest_layer
 from . import glossary as glossary_layer
 from . import profile as profile_layer
+from . import slideset as slideset_layer
 
 
 def _dur(sec) -> str:
@@ -112,6 +114,25 @@ def _pubdate(ts) -> str:
         return "-"
 
 
+def _dispatched_ids(man: dict, owner: str | None, scope: str) -> list[str]:
+    """本次**实际派发**的章号（写进派单台账的 chapters）。
+
+    --owner chapter:03 与 --scope chapter:03,04 都是「只派这几章」的写法，只记它们；
+    其它取值（manifest / pipeline / all / sample:3）不限定章范围，记 manifest 的全部章。
+    **不要无条件记全部章**：重切片后只为某章重跑 brief 时，那会把其余章的漂移洗掉。
+    """
+    all_ids = [str(c.get("id")) for c in man.get("chapters") or []]
+    picked = set()
+    for raw in (owner or "", scope or ""):
+        for m in re.finditer(r"chapter:([0-9][0-9,\s]*)", str(raw)):
+            for x in m.group(1).split(","):
+                if x.strip():
+                    picked.add(x.strip().zfill(2))
+    if not picked:
+        return all_ids
+    return [cid for cid in all_ids if cid in picked]
+
+
 def render(cfg, paths, meta: dict, stage: str = "both", allow_unconfirmed: bool = False,
            owner: str | None = None, scope: str = "all", focus: str = "fidelity",
            round_no: int = 1) -> dict:
@@ -202,6 +223,11 @@ def render(cfg, paths, meta: dict, stage: str = "both", allow_unconfirmed: bool 
         p.write_text(text, encoding="utf-8")
         out[st] = str(p)
         print("[brief] 派单 prompt（%s）→ %s" % (st, p))
+    if "chapter" in stages:
+        # 派单时刻的切片身份：只有这一刻知道「写手看到的是哪一版图」（collect 在写作之后才跑，
+        # 只能搬运、不能自己取值）。放在这里而不是 cmd_brief：--stage both 一并覆盖，
+        # fix/review/note 不记，且天然在术语表门禁之后（派单失败却留下指纹是不该发生的）。
+        slideset_layer.record_dispatch(paths, stage, _dispatched_ids(man, owner, scope))
     return out
 
 
