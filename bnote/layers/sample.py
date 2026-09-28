@@ -50,6 +50,7 @@ def _params(cfg: dict) -> dict:
             "max_height": int(s.get("max_height", 720) or 0),
             "dur_tol_sec": float(s.get("dur_tol_sec", 0.5)),
             "first_frame_tol_sec": float(s.get("first_frame_tol_sec", 1.0)),
+            "keep_parts": bool(s.get("keep_parts", True)),
             "anchors": [float(x) for x in (s.get("window_anchors") or ANCHORS)]}
 
 
@@ -247,6 +248,16 @@ def run(cfg: dict, paths, force: bool = False, window_sec: float | None = None) 
         raise SystemExit("取样映射自检未通过（实现错，不是数据错）：\n  " + "\n  ".join(problems))
     dest = paths.sample_index
     if dest.exists() and not force:
+        # §3.6-2 规则 7：**媒体**没了要明确报错（否则"跳过"会掩盖一个再也复算不了的包）；
+        # 帧被 clean 删掉则只提醒——index.json 与包内 overlay/measure 仍可复算，不该因此报错。
+        sample_media = paths.sample_media / "sample_video.mp4"
+        if not sample_media.exists():
+            raise SystemExit(
+                "取样包的 index.json 还在，但取样媒体已不在（被 clean 过？）：\n"
+                "  媒体：%s\n  → 重跑 bnote sample --force" % sample_media)
+        if not any(paths.sample_frames.glob("*.jpg")):
+            print("[sample] ⚠ 取样帧已不在（被 clean 过？）：%s —— index.json 仍有效，只是复算要先 --force"
+                  % paths.sample_frames)
         doc = paths.read_json(dest) or {}
         print("[sample] 已存在，跳过（--force 重跑）：%s" % _rel(paths, dest))
         print(coverage_line(doc))
@@ -335,4 +346,16 @@ def run(cfg: dict, paths, force: bool = False, window_sec: float | None = None) 
           % (", ".join("%+.3f" % d for d in devs), p["first_frame_tol_sec"]))
     print(coverage_line(doc))
     print("[sample] 映射自检 + 时长/首帧自检通过 ｜ %.1fs → %s" % (time.monotonic() - t0, _rel(paths, dest)))
+    dirs = [d for d in sorted(paths.sample_media.glob("w*")) if d.is_dir()]
+    if p["keep_parts"]:
+        print("[sample] 保留原始分片 %s（[sample].keep_parts=false 可关）"
+              % "、".join(d.name for d in dirs))
+    else:
+        names = [d.name for d in dirs]
+        for d in dirs:
+            shutil.rmtree(d)
+        # concat.txt 指的是刚被删掉的分片：留着就是一份指向已删文件的清单，一起清。
+        (paths.sample_media / "concat.txt").unlink(missing_ok=True)
+        print("[sample] 已删原始分片 %s 与 concat.txt（keep_parts=false）；只留 sample_video.mp4"
+              % "、".join(names))
     return doc

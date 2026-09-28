@@ -143,6 +143,7 @@
 | sample | enabled | `False` |
 | sample | first_frame_tol_sec | `1.0` |
 | sample | fps | `1.0` |
+| sample | keep_parts | `True` |
 | sample | max_height | `720` |
 | sample | scale_height | `720` |
 | sample | window_anchors | `[0.1, 0.5, 0.9]` |
@@ -455,6 +456,7 @@ window_anchors       = [0.10, 0.50, 0.90]  # 片头 / 中段 / 片尾的锚点�
 fps                  = 1.0    # 取样抽帧频率（判型只要形态；比整片 2fps 省一半以上）
 scale_height         = 720    # 取样帧缩放高度（0 = 不缩放）
 max_height           = 720    # 取样下载的画质上限（比整片低一档，省流量）
+keep_parts           = true   # 成功后是否保留各窗原始分片 sample/media/wNN/（false = 只留拼好的 sample_video.mp4）
 dur_tol_sec          = 0.5    # 拼接实测时长与「请求窗口之和」的容差（yt-dlp 多段是分别下载再拼接）
 first_frame_tol_sec  = 1.0    # 每个窗口首帧 t 与窗口起点的容差（应 >= 1/fps）
 

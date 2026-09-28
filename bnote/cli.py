@@ -599,6 +599,12 @@ def cmd_sample(args):
     产物只落 cache/<vid>/sample/（私有根）：cache/frames/index.json、顶层 overlay.json 与
     measure.json 一行不动。判型（triage）与信息流画面旁证都消费它；覆盖口径会打印一行。
     """
+    # P13（agent 节点必须生效）：这两个 common 参数对本命令无效，**显式拒绝**而不是静默覆盖
+    if getattr(args, "sections", None):
+        raise SystemExit("bnote sample 自己规划取样窗口（[sample].window_sec / window_anchors），\n"
+                         "  不接受 --sections（它只对 run/stream 有效）")
+    if getattr(args, "audio_only", False):
+        raise SystemExit("bnote sample 必须下视频（判型与画面旁证都要看画面），不接受 --audio-only")
     cfg, paths, vid = _ctx(args)
     sample_layer.run(cfg, paths, force=args.force, window_sec=args.window_sec)
     return 0
