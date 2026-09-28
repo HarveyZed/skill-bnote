@@ -130,6 +130,7 @@
 | roles | letterbox_min | `0.1` |
 | roles | letterbox_window_min | `0.25` |
 | roles | light_threshold | `0.7` |
+| roles | occlusion_swap | `False` |
 | roles | presenter_mode_max | `0.35` |
 | roles | presenter_skin_min | `0.05` |
 | roles | stroke_gap | `0.15` |
@@ -404,6 +405,21 @@ fg_gap              = 0.20   # 与底色差多少才算前景像素
 ink_dark_max        = 0.62   # 墨迹阈值（沿用 segment 的口径）
 stroke_gap          = 0.15   # 笔画量测的深色阈值相对本帧中位数下移多少
 light_threshold     = 0.70   # light_frac 的阈值（只作记录：判据一律与明暗主题无关）
+# M4b「遮挡最少」换帧的开关：**默认 false（关闭）**。
+# 判据本身**保留**——roles._occlusion 照旧逐帧算最大连通前景块占比，与 role_evidence 一起写进
+# 候选表（segments.json / slides.json），可查可复核；只是不参与选帧。
+occlusion_swap      = false  # 为什么默认关（唯一真实样本上判错方向）：
+                             #   15 集语料里这条判据只触发过一次 —— p23 段 11（621.5–722.5 s），
+                             #   把 001404 换成了 001244。逐帧目视复核：
+                             #     * 001404（判 occlusion 0.752，得分 177.54）：**完整渲染**的一页
+                             #       （「充分利用工具和技术 / 01 善用大模型 / 02 善用评估框架」），
+                             #       页面上只有一个小鼠标箭头；
+                             #     * 001244（判 occlusion 0.504，得分 165.25）：**淡入中的半渲染帧**
+                             #       —— 右栏白字几乎不可见、左栏整体发灰。
+                             #   也就是说判据把**幻灯片自己的深色面板**当成前景块、把淡入帧当成
+                             #   "少遮挡"，结论与"哪张更完整"正好相反。
+                             # true = 恢复 M4b 的换帧行为，配合 [segment].occ_score_tol /
+                             #   occ_min_gain 两个门槛；那两项只在开关打开时才生效。
 
 [measure]
 # M1 媒体验测（bnote measure）：**一次解码**同时出切点/冻结段/静音段/逐秒运动，零 token。
@@ -466,7 +482,9 @@ page_cut_only_cuts  = true      # 只有"硬切"（大幅帧差）才算换页�
 page_cut_percentile = 0.85      # 硬切门槛：帧差分位数
 page_cut_multiple   = 3.0       # 硬切门槛的辅助倍数
 page_cut_lookback_sec = 1.5     # 稳定段起点前多久内出现硬切才算换页
-# M4b「遮挡最少」：同页候选中挑遮挡最少的（判据数字 = 最大连通前景块占比，见 roles._occlusion）
+# M4b「遮挡最少」：同页候选中挑遮挡最少的（判据数字 = 最大连通前景块占比，见 roles._occlusion）。
+# **换帧默认关闭**（开关是 [roles].occlusion_swap=false，理由与逐帧证据写在 [roles] 段）；
+# 下面两项只在开关打开时才生效。
 occ_score_tol       = 0.10      # 只在"信息量接近"的候选之间比遮挡（打分 >= 最高分×(1-它)）；
                                 #   不设这个门槛会把动画中途的不完整帧选成主图
 occ_min_gain        = 0.10      # 遮挡要明显更少才值得换（占比差 >= 它；0.10 ≈ 画面 10%）

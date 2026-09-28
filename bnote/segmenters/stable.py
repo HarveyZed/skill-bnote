@@ -325,22 +325,30 @@ def _chosen_doc(c: dict) -> dict:
             "role": c.get("role"), "role_evidence": c.get("role_evidence")}
 
 
-# M4b「遮挡最少」的两个门槛（都在 [segment] 段可覆盖，见 config/default.toml）：
+# M4b「遮挡最少」：**换帧默认关闭**（[roles].occlusion_swap，默认 false），判据本身保留。
+#   occlusion_swap=false 时选帧**完全不做**遮挡换帧，但 occlusion 照旧逐帧算并落盘（证据可查）——
+#   为什么默认关：这条判据在 15 集语料里唯一触发过的那一次就是判错的（p23 段 11，621.5–722.5 s，
+#   把完整渲染的 001404 换成了淡入中的半渲染帧 001244）；逐帧目视证据见 config/default.toml。
+# 打开后（true）用它下面这两个门槛（都在 [segment] 段可覆盖，见 config/default.toml）：
 #   occ_score_tol：只在"信息量接近"的候选之间比遮挡 —— 打分差超过这个比例就不换，
 #     否则会把**动画中途**的不完整帧（信息少但没被挡）选成主图，那是 M4 一直在防的退化。
 #   occ_min_gain：遮挡要明显更少才值得换（同一页内最大连通前景块的占比差）。
 def _apply_roles(cfg, paths, out, masks, role_fn, page_roles=("full_page",)) -> None:
-    """M4/M4b：判角色 → **整页优先** + **遮挡最少**选帧（§3.5-2/3 + M4b）。
+    """M4/M4b：判角色 → **整页优先**（+ 可选的**遮挡最少**换帧，默认关）选帧（§3.5-2/3 + M4b）。
 
     四件事，顺序不能换：
       1) 把全集候选帧交给角色层一次性判完（同一文件只读一次；笔画中位数是**本集口径**）；
       2) 每段：只要存在可当主图的候选（page_roles，full_page 优先、其次 app_screen），
          终态就必须换成它们里的一张；
-      3) 在这一档候选里，**信息量接近**（打分 >= best*(1-occ_score_tol)）而**遮挡明显更少**
-         （occlusion <= 当前 - occ_min_gain）时换帧 —— "人/桌面挡住半页"的那张让位；
-      4) 每段写 role / role_evidence（取自终选帧），候选表里也各写一份（check 靠它复核）。
+      3) 仅当 [roles].occlusion_swap=true（**默认 false**）时，在这一档候选里挑
+         **信息量接近**（打分 >= best*(1-occ_score_tol)）而**遮挡明显更少**
+         （occlusion <= 当前 - occ_min_gain）的那张换帧 —— "人/桌面挡住半页"时让位；
+         默认关是因为该判据在唯一真实样本上判错（见 config/default.toml 的注释）；
+      4) 每段写 role / role_evidence（取自终选帧），候选表里也各写一份（check 靠它复核）；
+         occlusion 无论开关都照旧写进候选表（判据保留，只是不参与换帧）。
     """
     segcfg = cfg.get("segment") or {}
+    swap_on = bool((cfg.get("roles") or {}).get("occlusion_swap", False))
     score_tol = float(segcfg.get("occ_score_tol", 0.10))
     min_gain = float(segcfg.get("occ_min_gain", 0.10))
     files = []
@@ -374,8 +382,10 @@ def _apply_roles(cfg, paths, out, masks, role_fn, page_roles=("full_page",)) -> 
                          best.get("role"), best["score"]))
             seg["chosen"] = _chosen_doc(best)
             cur = best
-        # M4b-3：同档候选里挑遮挡最少的（只换"信息量接近且遮挡明显更少"的）
-        if pool and cur is not None:
+        # M4b-3：同档候选里挑遮挡最少的（只换"信息量接近且遮挡明显更少"的）。
+        # **默认关闭**（[roles].occlusion_swap=false）：这条判据在 15 集语料里唯一的真实样本上
+        # 判错了方向（见上方注释与 config/default.toml）；occlusion 数值照旧逐帧落盘。
+        if swap_on and pool and cur is not None:
             top = max(c["score"] for c in pool)
             cur_occ = cur.get("occlusion")
             cands_ok = [c for c in pool

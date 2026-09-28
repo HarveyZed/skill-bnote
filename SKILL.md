@@ -124,9 +124,12 @@ fetch      只取数（meta + media + subtitle），不做抽帧/切片
 stream     信息流/口播类（无幻灯片）：取音频+字幕 → 分段分块 → 整理稿（--assemble 拼接+校验）
 meta       只取元信息（BV/p/cid/标题/时长/**简介/标签/分区/UP 置顶评论**；旧缓存会自动补取）
 slides     只做抽帧 + 切片 + OCR（改了切片参数后重跑它，再跑 bundle）；M3 起顺序是抽帧 → overlay → 切片；
-           M4 起切片前还会做**帧角色分类 + 整页优先 + 遮挡最少**：段内只要存在可当主图的候选
-           （full_page 或 app_screen）就不能选别的；同一档候选里再挑**遮挡最少**的那张（信息量接近时）。
-           每段写 role / role_evidence，候选表逐帧带 role 与 occlusion，bundle 再把它们镜像进
+           M4 起切片前还会做**帧角色分类 + 整页优先**：段内只要存在可当主图的候选
+           （full_page 或 app_screen）就不能选别的。**「遮挡最少」换帧默认关闭**
+           （[roles].occlusion_swap=false；它唯一的真实样本 p23 段 11 上判错了方向，逐帧证据见
+           config/default.toml），打开后才在同一档候选里再挑遮挡最少的那张（信息量接近时）。
+           遮挡数值照旧落盘：每段写 role / role_evidence，候选表逐帧带 role 与 occlusion，
+           bundle 再把它们镜像进
            slides.json 每页。M4b 的第六个角色 app_screen = 整屏 IDE/浏览器/终端/桌面录屏：
            **仍是整屏内容、整页优先照旧可作主图**，只是不走手写涂白（见 overlay 那条）
 bundle     只重建交付物（slides/ + slides.json + transcript.md），并快照旧讲义；slides.json 顶层写这一版切片的指纹
