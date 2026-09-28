@@ -30,6 +30,7 @@ from pathlib import Path
 
 from . import auth_cli
 from .config import describe, load
+from .tools import resolve_basis
 from .layers import auth as auth_layer
 from .layers import body as body_layer
 from .layers import export_bili_note as export_layer
@@ -575,7 +576,7 @@ def cmd_overlay(args):
     判定输入只有 cache/frames/，不重新解码整片；没有帧就先跑 bnote slides。
     """
     cfg, paths, vid = _ctx(args)
-    overlay_layer.run(cfg, paths, force=args.force)
+    overlay_layer.run(cfg, paths, force=args.force, basis=resolve_basis(paths, args.basis))
     return 0
 
 
@@ -586,10 +587,16 @@ def cmd_measure(args):
     不接进 run/slides —— M1 只在显式调用时跑，现有产物与既有成本零变化。
     """
     cfg, paths, vid = _ctx(args)
-    media_path = media_layer.find_media(paths)
-    if media_path is None:
-        raise SystemExit("没有媒体文件，请先执行 bnote fetch（%s）" % paths.media)
-    measure_layer.run(cfg, paths, media_path, force=args.force)
+    basis = resolve_basis(paths, args.basis)
+    if basis:                      # 取样模式量的是**取样媒体**，不是整片媒体
+        media_path = paths.sample_media / "sample_video.mp4"
+        if not media_path.exists():
+            raise SystemExit("没有取样媒体（%s）：先跑 bnote sample <URL> --page N" % media_path)
+    else:
+        media_path = media_layer.find_media(paths)
+        if media_path is None:
+            raise SystemExit("没有媒体文件，请先执行 bnote fetch（%s）" % paths.media)
+    measure_layer.run(cfg, paths, media_path, force=args.force, basis=basis)
     return 0
 
 
@@ -732,10 +739,14 @@ def build_parser():
 
     sp = sub.add_parser("overlay", help="M3 遮挡区识别：烧录字幕条 / 角状外物（工具条·水印·进度条）→ cache/<vid>/overlay.json")
     common(sp)
+    sp.add_argument("--basis", choices=["full", "sample"], default="full",
+                    help="full（默认）= 整片帧；sample = 取样包帧 → cache/<vid>/sample/overlay.json")
     sp.set_defaults(func=cmd_overlay)
 
     sp = sub.add_parser("measure", help="零 token 媒体验测：逐秒运动 + 切点/冻结段/静音段 → cache/<vid>/measure.json")
     common(sp)
+    sp.add_argument("--basis", choices=["full", "sample"], default="full",
+                    help="full（默认）= 整片媒体；sample = 取样媒体 → cache/<vid>/sample/measure.json")
     sp.set_defaults(func=cmd_measure)
 
     sp = sub.add_parser("sample", help="M5 取样包：片头/中段/片尾各下一小段 → cache/<vid>/sample/（判型与信息流旁证用）")

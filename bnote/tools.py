@@ -184,6 +184,30 @@ def _probe_with_ffmpeg(ffmpeg: str, media_path) -> dict:
     }
 
 
+# ---------------------------------------------------------------- M5 取样包 basis（契约 §3.6）
+FULL_BASIS = "cache/frames/index.json"
+
+
+def resolve_basis(paths, name: str = "full") -> dict | None:
+    """--basis 解析：**full → None**（调用方沿用原路径，行为一个字节都不变）。
+
+    sample → 取样包输入描述（帧列表 / 帧根目录 / fps / 时间偏移 / 索引 relpath / 整份索引）。
+    没有取样包时**明确报错**，不静默退回整片 —— 静默退回会让"我在看取样数据"这个判断错
+    （§3.6-3）。放中性工具里的理由：overlay 与 measure 都要用它，层与层不互相 import（P1）。
+    """
+    if name in (None, "", "full"):
+        return None
+    if name != "sample":
+        raise SystemExit("未知 --basis：%r（只有 full / sample）" % (name,))
+    rel = "cache/%s/sample/index.json" % paths.vid
+    doc = paths.read_json(paths.sample_index, None)
+    if not isinstance(doc, dict) or not doc.get("frames"):
+        raise SystemExit("没有取样包（%s）：先跑 bnote sample <URL> --page N" % rel)
+    return {"name": "sample", "relpath": rel, "index": doc,
+            "frames": doc.get("frames") or [], "fps": doc.get("fps"),
+            "root": paths.sample_frames, "offset": 0.0}
+
+
 def yt_dlp_python(cfg: dict) -> str:
     """返回可执行的 python 解释器（用于 -m yt_dlp）"""
     custom = cfg["tools"].get("yt_dlp")

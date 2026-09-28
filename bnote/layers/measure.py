@@ -64,13 +64,15 @@ SILENCE_END_RE = re.compile(r"silence_end:\s*(-?\d+(?:\.\d+)?)")
 # 流信息探测（含 ffprobe 不可用时的三条兜底正则）已挪到 tools.probe_media —— L4 取帧与 L4.5 量测共用一份
 
 
-def _overlay_masks(paths):
-    """读 cache/<vid>/overlay.json 里**可采信**的区域框；没有就返回 []。
+def _overlay_masks(paths, basis=None):
+    """读遮罩里**可采信**的区域框；没有就返回 []。
 
+    整片读 cache/<vid>/overlay.json；basis（取样包）读 cache/<vid>/sample/overlay.json ——
+    取样量测必须用**取样自己的**遮罩，否则整片遮罩套在取样片段上会错位。
     **文件就是接口**（P1）：这里不 import overlay 层，只认冻结的 regions[].box 与
     applicability 两个字段。缺文件或结构不对一律当"没有遮罩"，由 applicability 写明。
     """
-    doc = paths.read_json(paths.overlay) or {}
+    doc = paths.read_json(paths.sample_overlay if basis else paths.overlay) or {}
     out = []
     for r in (doc.get("regions") or []):
         box = r.get("box")
@@ -82,18 +84,21 @@ def _overlay_masks(paths):
     return out
 
 
-def _drawboxes(masks, cfg, media_size) -> list[str]:
+def _drawboxes(masks, cfg, media_size, basis=None) -> list[str]:
     """遮挡区 -> drawbox 参数（像素）。掩码作用在**同一条解码链**上，不额外解码。
 
     overlay 的坐标空间是**抽帧后的画面**，量测解码的是媒体原图：`[frames].crop` 非空时
     必须换算（tools.crop_box_to_media），否则掩码错位 —— 错位的掩码比不遮更坏。
+
+    取样模式**不做 crop 换算**：取样帧是直接从取样媒体抽的（只过 fps/scale，没裁过），
+    而 basis 里那两帧的坐标系本来就一致 —— 拿整片的 crop 去换算反而会错位。
     """
     if not masks or not media_size:
         return []
     W, H = int(media_size[0] or 0), int(media_size[1] or 0)
     if W <= 0 or H <= 0:
         return []
-    crop = (cfg.get("frames") or {}).get("crop") or ""
+    crop = "" if basis else ((cfg.get("frames") or {}).get("crop") or "")
     out = []
     for box in masks:
         l, t, r, b = crop_box_to_media(box, crop, (W, H))
@@ -104,12 +109,12 @@ def _drawboxes(masks, cfg, media_size) -> list[str]:
     return out
 
 
-def _applicability(paths, masks) -> dict:
+def _applicability(paths, masks, basis=None) -> dict:
     """适用性：按遮罩算还是全画面算、遮罩从哪来（M1 已有该字段，M3 才真正用起来）。"""
     if not masks:
         return {"masked": False, "mask_source": None, "note": APPLICABILITY_NOTE}
-    return {"masked": True,
-            "mask_source": "%s（%d 个区域）" % (_rel(paths, paths.overlay), len(masks)),
+    src = (basis or {}).get("relpath") or _rel(paths, paths.overlay)
+    return {"masked": True, "mask_source": "%s（%d 个区域）" % (src, len(masks)),
             "note": MASK_NOTE}
 
 
@@ -130,14 +135,14 @@ def _float(raw, default: float = 0.0) -> float:
 
 # ---------------------------------------------------------------- 一次解码
 def build_command(ffmpeg: str, media_path: Path, cfg: dict, meta_file: str,
-                  has_audio: bool, masks=None, media_size=None) -> list[str]:
+                  has_audio: bool, masks=None, media_size=None, basis=None) -> list[str]:
     """视频侧 freezedetect → scdet → metadata 打点（逐帧 mafd/score），音频侧 silencedetect。
 
     `-loglevel info` 是给 silencedetect 用的：它的 silence_start/end 走日志，不走帧 metadata；
     `-nostats` 顺手关掉进度刷屏。**不加 signalstats**（占 92% 墙钟，M1 不需要）。
     """
     m = cfg["measure"]
-    chain = _drawboxes(masks, cfg, media_size)          # 遮罩在这一步就位，链路不变长
+    chain = _drawboxes(masks, cfg, media_size, basis)   # 遮罩在这一步就位，链路不变长
     chain.append("freezedetect=n=%sdB:d=%s" % (_num(m["freeze_noise_db"]),
                                                _num(m["freeze_min_sec"])))
     chain.append("scdet=threshold=%s" % _num(m["scdet_threshold"]))
@@ -229,9 +234,15 @@ def _segments(pairs: list[tuple], open_start: float | None, duration: float) -> 
     return out
 
 
-def _sampling(paths) -> tuple[int | None, float | None]:
-    """抽帧采样盲区上界：读 cache/frames/index.json（不存在就 None）。"""
-    idx = paths.read_json(paths.frames / "index.json")
+def _sampling(paths, basis=None) -> tuple[int | None, float | None]:
+    """抽帧采样盲区上界：整片读 cache/frames/index.json，取样读取样包索引（不存在就 None）。
+
+    **取样模式下这个数不小**：它是"相邻取样帧的最大时间间隔"，而取样帧只落在几个窗口里，
+    所以它天然包含**窗口之间**的距离（P25 实测 105.4 s，窗口 1 末帧 62.6 s → 窗口 2 首帧 168.0 s）。
+    别把它当"窗口内的稀疏程度"；"哪几段完全没看"另有取样包 index.json 的
+    coverage.uncovered_max_gap_sec（按窗口边界算，实测 104.4 s）——两者相差的是帧粒度。
+    """
+    idx = (basis or {}).get("index") or paths.read_json(paths.frames / "index.json")
     if not idx:
         return None, None
     ts = [_float(f.get("t")) for f in (idx.get("frames") or []) if f.get("t") is not None]
@@ -266,24 +277,45 @@ def _buckets(frames: list[dict], duration: float) -> list[dict]:
              "n": counts[i]} for i in range(nb)]
 
 
-def analyze(cfg: dict, paths, media_path: Path) -> dict:
-    """跑一次解码并组出 measure 文档（**不落盘**，便于单独测试与复算）。"""
+def _source(media_path: Path, duration: float, info: dict, basis) -> dict:
+    """source 段。**只有取样模式**加 basis 字段（§3.6-5 定稿）。
+
+    顶层的 cache/<vid>/measure.json **一行不动**：它是 M1 的确定性产物，36f248f4… 这条锚点
+    被两份报告引用着；而 source.file 已经指明媒体，"整片"是零信息量常量。
+    """
+    out = {"file": media_path.name,
+           "duration": round(duration, 3),
+           "fps": round(info["fps"], 3),
+           "width": info["width"],
+           "height": info["height"],
+           "has_audio": info["has_audio"]}
+    if basis:
+        out["basis"] = basis["relpath"]
+    return out
+
+
+def analyze(cfg: dict, paths, media_path: Path, basis=None) -> dict:
+    """跑一次解码并组出 measure 文档（**不落盘**，便于单独测试与复算）。
+
+    basis=None = 整片（行为与 M1/M3 逐字节相同）；basis = 取样包（遮罩/采样上界/basis 字段
+    都取自取样包，落点也换成 sample/measure.json）。
+    """
     info = probe_media(cfg, media_path)
     if not info["has_video"]:
         raise SystemExit("[measure] %s 没有视频轨：量测需要画面（口播/播客类请走 bnote stream）"
                          % media_path.name)
     ffmpeg = find_ffmpeg(cfg)
-    masks = _overlay_masks(paths)
+    masks = _overlay_masks(paths, basis)
     media_size = (info["width"], info["height"])
     if masks:
         print("[measure] 按遮罩算：%d 个区域来自 %s → drawbox 涂掉后再 freezedetect/scdet"
-              % (len(masks), _rel(paths, paths.overlay)))
+              % (len(masks), (basis or {}).get("relpath") or _rel(paths, paths.overlay)))
     else:
         print("[measure] 未按遮罩算（没有 cache/<vid>/overlay.json）：全画面参与 motion/freeze")
     with tempfile.TemporaryDirectory(prefix="bnote-measure-") as td:
         meta_file = str(Path(td) / "meta.txt")
         cmd = build_command(ffmpeg, media_path, cfg, meta_file, info["has_audio"],
-                            masks=masks, media_size=media_size)
+                            masks=masks, media_size=media_size, basis=basis)
         proc = subprocess.run(cmd, capture_output=True, text=True,
                               encoding="utf-8", errors="replace")
         if proc.returncode != 0:
@@ -309,26 +341,21 @@ def analyze(cfg: dict, paths, media_path: Path) -> dict:
     cuts = [{"t": round(f["t"], 3), "score": round(f["score"], 3)}
             for f in frames if f["score"] >= cut_min]
 
-    sampled, sampling_gap = _sampling(paths)
+    sampled, sampling_gap = _sampling(paths, basis)
     freeze_total = round(sum(s["dur"] for s in freezes), 3)
     silence_total = round(sum(s["dur"] for s in silences), 3)
     return {
         "schema": SCHEMA,
         "vid": paths.vid,
         "algo": ALGO,
-        "source": {"file": media_path.name,
-                   "duration": round(duration, 3),
-                   "fps": round(info["fps"], 3),
-                   "width": info["width"],
-                   "height": info["height"],
-                   "has_audio": info["has_audio"]},
+        "source": _source(media_path, duration, info, basis),
         "params": {"scdet_threshold": m["scdet_threshold"],
                    "cut_score_min": m["cut_score_min"],
                    "freeze_noise_db": m["freeze_noise_db"],
                    "freeze_min_sec": m["freeze_min_sec"],
                    "silence_noise_db": m["silence_noise_db"],
                    "silence_min_sec": m["silence_min_sec"]},
-        "applicability": _applicability(paths, masks),
+        "applicability": _applicability(paths, masks, basis),
         "coverage": {"decode_frames": len(frames),
                      "decode_max_gap_sec": decode_gap,
                      "sampled_frames": sampled,
@@ -368,9 +395,13 @@ def summary_line(doc: dict, elapsed: float, dest: str) -> str:
                cov.get("decode_max_gap_sec"), gap_txt, elapsed, dest))
 
 
-def run(cfg: dict, paths, media_path: Path, force: bool = False) -> dict:
-    """bnote measure 的入口：已存在且非 --force 就跳过；跑完打印一行摘要。"""
-    dest = paths.measure
+def run(cfg: dict, paths, media_path: Path, force: bool = False, basis=None) -> dict:
+    """bnote measure 的入口：已存在且非 --force 就跳过；跑完打印一行摘要。
+
+    basis=None 写 cache/<vid>/measure.json；basis=取样包写 cache/<vid>/sample/measure.json
+    （**不碰顶层**）。
+    """
+    dest = paths.sample_measure if basis else paths.measure
     if not cfg["measure"].get("enabled", True):
         print("[measure] 已按配置关闭（[measure].enabled=false），跳过")
         return {}
@@ -379,7 +410,7 @@ def run(cfg: dict, paths, media_path: Path, force: bool = False) -> dict:
         print("[measure] 已存在，跳过（--force 重跑）：%s" % _rel(paths, dest))
         return doc
     t0 = time.monotonic()
-    doc = analyze(cfg, paths, media_path)
+    doc = analyze(cfg, paths, media_path, basis=basis)
     paths.cache.mkdir(parents=True, exist_ok=True)     # 只建自己要写的那一层
     paths.write_json(dest, doc)
     print(summary_line(doc, time.monotonic() - t0, _rel(paths, dest)))

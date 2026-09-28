@@ -76,7 +76,9 @@ from ..segmenters.framesig import (STROKE_DEFAULTS, app_params, app_screen_metri
 
 SCHEMA = "bnote-overlay/1"
 ALGO = "bnote-overlay/1"
-BASIS = "cache/frames/index.json"          # source.basis：帧从哪来（只可能是抽帧产物）
+# source.basis：帧从哪来。**整片模式的值不变**（旧产物可直接比对）；取样模式写取样包
+# 索引的 relpath（§3.6-3）。--basis 的解析在 tools.resolve_basis（full → None = 沿用原路径）。
+BASIS = "cache/frames/index.json"
 
 # kind 枚举（取值**只能**来自这里）。handwriting 是 M4 新增：彩色细笔画 = 手写笔迹，
 # **只用于把它从 OCR 与帧差/墨迹里排除，交付图里照旧保留**。
@@ -609,10 +611,15 @@ def _params_doc(p: dict) -> dict:
         "handwriting_min_frames", "handwriting_pad", *STROKE_DEFAULTS.keys())}
 
 
-def analyze(cfg: dict, paths, frames=None) -> dict:
-    """跑一遍并组出 overlay 文档（**不落盘**，便于单独测试与复算）。"""
+def analyze(cfg: dict, paths, frames=None, basis=None) -> dict:
+    """跑一遍并组出 overlay 文档（**不落盘**，便于单独测试与复算）。
+
+    basis=None = 整片模式（读 cache/frames/index.json，与 M3 逐字节相同）；
+    basis（来自 tools.resolve_basis("sample")）= 取样包：读取样索引、帧根目录换成取样帧目录。
+    """
     p = params(cfg)
-    idx = paths.read_json(paths.frames / "index.json") or {}
+    root = (basis or {}).get("root") or paths.frames
+    idx = (basis or {}).get("index") or (paths.read_json(paths.frames / "index.json") or {})
     if frames is None:
         frames = idx.get("frames") or []
     files = [str(f.get("file")) for f in frames if f.get("file")]
@@ -625,7 +632,7 @@ def analyze(cfg: dict, paths, frames=None) -> dict:
     if len(files) < frames_min:
         applies.append("帧数 %d < 门槛 %d，统计量不足" % (len(files), frames_min))
     else:
-        out = scan(paths.frames, files, p, app_params((cfg.get("roles") or {})))
+        out = scan(root, files, p, app_params((cfg.get("roles") or {})))
         size = out["size"]
         if out["R"] is None or out["pairs"] < 8:
             applies.append("可用帧对只有 %d，变化率判据不成立" % out["pairs"])
@@ -668,7 +675,7 @@ def analyze(cfg: dict, paths, frames=None) -> dict:
         "vid": paths.vid,
         "algo": ALGO,
         "source": {"frames": len(files), "fps": fps, "size": list(size) if size else None,
-                   "basis": BASIS},
+                   "basis": (basis or {}).get("relpath") or BASIS},
         "params": _params_doc(p),
         "regions": regions,
         "applicability": {"masked": masked,
@@ -712,9 +719,13 @@ def strokes(doc: dict) -> dict | None:
     return None
 
 
-def run(cfg: dict, paths, force: bool = False) -> dict:
-    """``bnote overlay`` 的入口：已存在且非 --force 就跳过；跑完打印一行摘要。"""
-    dest = paths.overlay
+def run(cfg: dict, paths, force: bool = False, basis: dict | None = None) -> dict:
+    """``bnote overlay`` 的入口：已存在且非 --force 就跳过；跑完打印一行摘要。
+
+    basis=None = 整片（cache/frames/index.json → cache/<vid>/overlay.json，行为不变）；
+    basis=取样包 → 取样帧 + cache/<vid>/sample/overlay.json（**不碰顶层 overlay.json**）。
+    """
+    dest = paths.sample_overlay if basis else paths.overlay
     if not _enabled(cfg):
         print("[overlay] 已按配置关闭（[overlay].enabled 或 [segment].auto_caption_strip=false），跳过")
         return {}
@@ -722,13 +733,18 @@ def run(cfg: dict, paths, force: bool = False) -> dict:
         doc = paths.read_json(dest) or {}
         print("[overlay] 已存在，跳过（--force 重跑）：%s" % _rel(paths, dest))
         return doc
-    frames = (paths.read_json(paths.frames / "index.json") or {}).get("frames") or []
+    if basis:
+        frames = basis.get("frames") or []
+    else:
+        frames = (paths.read_json(paths.frames / "index.json") or {}).get("frames") or []
     if not frames:
-        print("[overlay] 没有 cache/frames/index.json（先跑 bnote slides 抽帧）→ 不产出 overlay.json")
+        print("[overlay] 没有 %s（%s）→ 不产出 %s"
+              % ((basis or {}).get("relpath") or "cache/frames/index.json",
+                 "先跑 bnote sample" if basis else "先跑 bnote slides 抽帧", _rel(paths, dest)))
         return {}
     t0 = time.monotonic()
-    doc = analyze(cfg, paths, frames)
-    paths.cache.mkdir(parents=True, exist_ok=True)     # 只建自己要写的那一层
+    doc = analyze(cfg, paths, frames, basis=basis)
+    dest.parent.mkdir(parents=True, exist_ok=True)     # 只建自己要写的那一层
     paths.write_json(dest, doc)
     print(summary_line(doc, time.monotonic() - t0, _rel(paths, dest)))
     return doc
