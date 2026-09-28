@@ -188,6 +188,21 @@ def _probe_with_ffmpeg(ffmpeg: str, media_path) -> dict:
 FULL_BASIS = "cache/frames/index.json"
 
 
+def check_basis_dest(dest, basis, full_name: str, sample_name: str) -> None:
+    """写前断言（复核 2026-09-28 裁定 (b)）：目标文件必须与 basis 对得上。
+
+    防的是"将来手滑用旧路径写新数据"——例如取样 basis 却写进整片的 sheet.json，
+    那会把整片面板的 tiles 洗掉，check 立刻假报"引用的面板没有 tile"。basis=取样时还要求
+    basis 自证是取样包（name == "sample"），两个真源互相校验。
+    """
+    want = sample_name if basis else full_name
+    if Path(dest).name != want:
+        raise SystemExit("[basis] 内部错误：basis=%s 却要写 %s（应为 %s）"
+                         % ((basis or {}).get("name") or "full", Path(dest).name, want))
+    if basis and basis.get("name") != "sample":
+        raise SystemExit("[basis] 取样 basis 自证失败：name=%r" % (basis.get("name"),))
+
+
 def resolve_basis(paths, name: str = "full") -> dict | None:
     """--basis 解析：**full → None**（调用方沿用原路径，行为一个字节都不变）。
 

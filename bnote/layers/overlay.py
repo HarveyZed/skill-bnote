@@ -74,6 +74,8 @@ from PIL import Image
 from ..segmenters.framesig import (STROKE_DEFAULTS, app_params, app_screen_metrics,
                                    stroke_mask, stroke_params)
 
+from ..tools import check_basis_dest
+
 SCHEMA = "bnote-overlay/1"
 ALGO = "bnote-overlay/1"
 # source.basis：帧从哪来。**整片模式的值不变**（旧产物可直接比对）；取样模式写取样包
@@ -744,6 +746,7 @@ def run(cfg: dict, paths, force: bool = False, basis: dict | None = None) -> dic
         return {}
     t0 = time.monotonic()
     doc = analyze(cfg, paths, frames, basis=basis)
+    check_basis_dest(dest, basis, "overlay.json", "overlay.json")   # 同名不同目录：靠 paths 决定
     dest.parent.mkdir(parents=True, exist_ok=True)     # 只建自己要写的那一层
     paths.write_json(dest, doc)
     print(summary_line(doc, time.monotonic() - t0, _rel(paths, dest)))

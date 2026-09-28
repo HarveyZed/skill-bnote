@@ -29,7 +29,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw
 import numpy as np
 
-from ..tools import sha256_file
+from ..tools import check_basis_dest, sha256_file
 
 from . import frames as frames_layer
 
@@ -317,6 +317,7 @@ def run(cfg, paths, t_from=None, t_to=None, want=None, preset=None, cols=None, r
     doc, info = build(cfg, paths, t_from=t_from, t_to=t_to, want=want,
                       preset=preset, cols=cols, rows=rows, basis=basis)
     dest = paths.meta_dir() / (SHEET_JSON_SAMPLE_NAME if basis else SHEET_JSON_NAME)
+    check_basis_dest(dest, basis, SHEET_JSON_NAME, SHEET_JSON_SAMPLE_NAME)
     paths.write_json(dest, doc)
     problems = verify(paths, doc, basis)
     p = doc["params"]

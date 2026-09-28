@@ -36,6 +36,7 @@ import time
 from pathlib import Path
 
 from ..tools import crop_box_to_media
+from ..tools import check_basis_dest
 from ..tools import find_ffmpeg
 from ..tools import probe_media
 
@@ -402,6 +403,7 @@ def run(cfg: dict, paths, media_path: Path, force: bool = False, basis=None) -> 
     （**不碰顶层**）。
     """
     dest = paths.sample_measure if basis else paths.measure
+    check_basis_dest(dest, basis, "measure.json", "measure.json")   # 同名不同目录：靠 paths 决定
     if not cfg["measure"].get("enabled", True):
         print("[measure] 已按配置关闭（[measure].enabled=false），跳过")
         return {}
