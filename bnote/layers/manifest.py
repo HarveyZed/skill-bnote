@@ -456,13 +456,34 @@ def validate(manifest: dict | None, paths, meta: dict, transcript: dict | None,
             pages = [r.page for r in img_refs if r.kind == "slides"]
             if not pages:
                 errors.append(_err("正文没有引用任何 slide 图", "chapter:%s" % cid, cid, str(ch.get("body"))))
+            reported: set = set()       # 已按"引用了不存在的图"报过的 slides 名（不重复报）
+            seen_written: set = set()   # 已报过的"解析不到"引用（同一形态只报一次）
             for r in img_refs:
-                if r.kind != "slides":
+                if r.kind == "slides":
+                    used_slides.add(r.page)
+                    if not refs_layer.ref_out_path(paths.out, r.kind, r.name).exists():
+                        errors.append(_err("引用了不存在的图 slides/%04d.jpg" % r.page, "pipeline", cid,
+                                           fix="多半是重切片后未跑 bnote remap，或 bundle 未刷新 slides/"))
+                        reported.add(r.name)
+                        continue
+                # 引用必须能**相对它所在的那个文件**（章文件在 chapters/ 下）解析到真实文件（0.15.1）。
+                # 页号/名字合法 ≠ 图还在、前缀没写错：章文件里漏写 `../` 时 ref_out_path（只看交付物根）
+                # 照样查得到，但读者打开讲义拿到的是坏图——正好补上"能不能定位"这一格。
+                key = (r.kind, r.prefix, r.name)
+                if key in seen_written:
                     continue
-                used_slides.add(r.page)
-                if not refs_layer.ref_out_path(paths.out, r.kind, r.name).exists():
-                    errors.append(_err("引用了不存在的图 slides/%04d.jpg" % r.page, "pipeline", cid,
-                                       fix="多半是重切片后未跑 bnote remap，或 bundle 未刷新 slides/"))
+                seen_written.add(key)
+                if refs_layer.ref_path_in(paths.chapters(), r.kind, r.name, r.prefix).exists():
+                    continue
+                errors.append(_err(
+                    "正文引用的图解析不到真实文件：%s（章文件在 chapters/ 下，按它解析应落在 %s，"
+                    "但该文件不存在）"
+                    % (r.prefix + refs_layer.ref_relpath(r.kind, r.name),
+                       refs_layer.ref_relpath(r.kind, r.name)),
+                    "chapter:%s" % cid, cid, str(ch.get("body")),
+                    fix="按契约写相对章文件的引用（../slides/NNNN.jpg、../_meta/sheets/<name>.png、"
+                        "../_meta/figures/<name>.png）；图被删/改名就重跑 bnote sheet / bnote figures，"
+                        "或删掉这条引用"))
             # 白名单之外：报出来而不是静默放行（merge 不改写它们，讲义里就是坏图）
             for target in refs_layer.unknown_targets(text):
                 errors.append(_err("图片引用不在三类白名单内：%s（只认 ../slides/NNNN.jpg、"
