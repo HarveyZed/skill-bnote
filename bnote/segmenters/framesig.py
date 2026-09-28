@@ -68,6 +68,44 @@ APP_DEFAULTS = {
 }
 
 
+# 「墨迹（ink）」判据的**唯一真源**：默认值在这里，[segment] 段可覆盖（BN_SEGMENT_INK_*）。
+# 语义 = "这一页画了多少东西" = **非背景像素占比**（与 config [ocr].weight_ink 的注释同义）。
+#
+# 为什么不再是固定阈值（本次修的就是它）：历史实现是 `(small < 0.62).mean()`，在**深色主题**下整帧
+#   都暗于 0.62 → ink 恒为 1.0（真实根复算：BV1CCtz6WEvF_p1 **22/22** 段、BV1F5YM6rEaJ_p1
+#   **18/19** 段）。ink 是选帧打分的一维（[ocr].weight_ink=30，见 stable._score_candidate），
+#   恒定 ⇒ 这一维失效、"墨迹最多的候选帧"也退化成池里第一帧（stable._pick_frame）。
+#
+# 现在逐帧自适应（四步，全部只看**这一帧自己的** 48x27 灰度剖面，不跨帧、不留状态）：
+#   ① 背景水平 bg = 直方图的**峰**（INK_BG_BINS=51 桶＝宽 0.02、INK_BG_SMOOTH=3 桶平滑、
+#      取峰桶内像素均值）。深色主题 bg≈0.035、白底主题 bg≈0.96（实测）。
+#   ② bg >= ink_white_bg_min（0.95）= 白底帧 → **原样用历史常数 ink_dark_thr（0.62）**：
+#      浅色集的 ink 因此逐帧**零漂移**（这正是"不许拿自适应去动浅色集"那条要求的落点。
+#      实测白底帧占比 p20 1342/1547、p22 2711/2802；这些帧 |新-旧| **恒等于 0**）。
+#   ③ 否则（深色 / 彩色底）→ OTSU 把这帧的亮度分成两类，取**远离 bg 的那一类**占比当 ink：
+#      深色主题的内容是"亮"的（白字 / 浅色面板在亮的一侧），所以那一类才是墨迹。
+#      实测（隔离根跑完整切片、含 overlay 遮罩）：BV1CC 0.115~0.265（中位 **0.161**）、
+#      BV1F5Y 0.099~0.327（中位 **0.233**）—— 旧口径分别是恒 1.0 与 0.762~1.0（饱和 7309/7700）。
+#      与页面密度同序：BV1CC 稀疏标题页 000123 vs 三表密集页 000509 在同一量级的不同档。
+#   ④ OTSU 两类的**类均值差** < ink_otsu_min_sep（0.05）= 这一帧**没有"内容/背景"两团**
+#      （纯色 / 渐变底 / 极低对比）→ ink = 0。用类均值差而不是"阈值贴不贴背景峰"：低对比度
+#      但有内容的深底页阈值就贴在峰上（BV1CC 段2 那张三表页：背景 0.097、阈值 0.133），
+#      按"贴峰"判会把 627 帧有内容的页误判成 0；按类均值差（同页 0.100）就不会。
+#      实测：这 4 集里判据④只触发 1 帧（p20；非白底帧的 sep 分布 p1 = 0.087）—— 它是护栏，
+#      不是主判据。
+# 与 layers/roles.py 的关系：那边的"底色/内容"用的是同一个概念（直方图峰），但阈值 fg_gap=0.20
+#   是为**版式判断**标定的、且没有"复现历史常数"的约束；两处**不合并**（改 roles 的阈值会动角色
+#   分类，属另一条判据的语义，不在本次范围）。
+INK_DEFAULTS = {
+    "ink_dark_thr": 0.62,        # 历史固定阈值：白底帧与 ink_adaptive=false 时原样用
+    "ink_white_bg_min": 0.95,    # 背景水平 >= 它 = 白底帧（实测白底簇 0.958~0.971、暗底簇 <=0.097）
+    "ink_otsu_min_sep": 0.05,    # OTSU 两类均值差的下限（小于它 = 这一帧没有内容/背景两团）
+}
+INK_BG_BINS = 51                 # 背景水平直方图桶数（宽 0.02）
+INK_BG_SMOOTH = 3                # 找峰时的平滑窗（桶）
+INK_OTSU_BINS = 64               # OTSU 直方图桶数（宽 1/64）
+
+
 def app_params(raw: dict | None) -> dict:
     """从 [roles] 配置（或任意字典）里取"整屏应用"判据参数；缺项用默认值。"""
     src = raw or {}
@@ -289,9 +327,86 @@ def hamming(a: int, b: int) -> int:
     return bin(a ^ b).count("1")
 
 
-def ink_ratio(small: np.ndarray) -> float:
-    """墨迹占比：暗像素比例，粗略代表"这一页画了多少东西" """
-    return float((small < 0.62).mean())
+def ink_params(raw: dict | None) -> dict:
+    """从 [segment] 配置（或任意字典）里取墨迹判据参数；缺项用默认值。"""
+    src = raw or {}
+    p = {k: float(src.get(k, v)) for k, v in INK_DEFAULTS.items()}
+    p["ink_adaptive"] = bool(src.get("ink_adaptive", True))
+    return p
+
+
+def _ink_bg_level(small: np.ndarray) -> float:
+    """这一帧的**背景水平**：灰度直方图的**峰**（窄桶 + 平滑 + 峰桶内像素均值）。
+
+    与 layers/roles.py 的"底色"同一个概念（那边是 20 桶的**桶中心**）——roles 的判据一律与明暗
+    主题无关，墨迹这一维过去却是固定的 0.62，于是深色主题整帧低于它 → ink 恒 1.0（见
+    INK_DEFAULTS 的说明）。这里取更细的桶并用峰桶内像素均值，是为了让白底帧算出的门槛能精确
+    落在历史常数上（roles 的桶中心有 0.025 的量化误差，复现不了 0.62）。
+    """
+    x = np.asarray(small, dtype=np.float64).ravel()
+    # 等宽桶用 bincount 自己分箱（与 np.histogram(bins=51, range=(0,1)) 同 bin：floor(x*51)，
+    # 末桶含 1.0）。np.histogram 在 1296 个格子上要 ~72 us，本函数**每帧都要跑**（整片 7700 帧
+    # → 0.55 s），所以自己分箱（实测 ink_ratio 单帧 46 us，旧口径 7 us；见 PACK-INK-ADAPTIVE）。
+    idx = np.clip((x * INK_BG_BINS).astype(np.int64), 0, INK_BG_BINS - 1)
+    h = np.bincount(idx, minlength=INK_BG_BINS).astype(np.float64)
+    sm = np.convolve(h, np.ones(INK_BG_SMOOTH), mode="same")
+    k = int(np.argmax(sm))
+    lo = (k - 0.5) / INK_BG_BINS
+    hi = (k + 0.5) / INK_BG_BINS
+    m = (x >= lo) if k >= INK_BG_BINS - 1 else ((x >= lo) & (x < hi))
+    if not m.any():
+        return (k + 0.5) / INK_BG_BINS
+    return float(x[m].mean())
+
+
+def _otsu_split(small: np.ndarray) -> tuple[float, float, float]:
+    """OTSU 两分类：返回 (阈值, 暗类均值, 亮类均值)（阈值 = 类间方差最大处的桶中心）。
+
+    两个类均值之差 = "这两团到底分不分得开"的**绝对尺度**判据（见 ink_ratio 第 ④ 步）。
+    为什么不用 |阈值 - 背景水平| 当这个守卫：对**低对比度但有内容**的页（BV1CC 段2 那张
+    深蓝底三表页：背景水平 0.097、内容尾到 0.27）OTSU 的阈值就贴在背景峰边上（差 0.036），
+    而那页明明有 0.17 的墨迹 —— 实测 627 帧会被那种守卫误判成"没有内容"。类均值差是
+    两团之间的**距离**，不受"阈值贴不贴峰"影响：同一页实测 0.100，与 p1 分位的 0.087 同量级。
+    """
+    x = np.asarray(small, dtype=np.float64).ravel()
+    idx = np.clip((x * INK_OTSU_BINS).astype(np.int64), 0, INK_OTSU_BINS - 1)
+    p = np.bincount(idx, minlength=INK_OTSU_BINS).astype(np.float64)
+    tot = p.sum()
+    if tot <= 0:
+        return 0.5, 0.0, 1.0
+    p /= tot
+    c = (np.arange(INK_OTSU_BINS, dtype=np.float64) + 0.5) / INK_OTSU_BINS
+    w0 = np.cumsum(p)
+    m0 = np.cumsum(p * c)
+    mt = m0[-1]
+    den = w0 * (1.0 - w0)
+    den[den <= 0] = 1e-9
+    sigma = (mt * w0 - m0) ** 2 / den
+    k = int(np.argmax(sigma))
+    lo_w = float(w0[k])
+    mean_lo = float(m0[k] / lo_w) if lo_w > 0 else float(c[k])
+    mean_hi = float((mt - m0[k]) / (1.0 - lo_w)) if lo_w < 1.0 else float(c[k])
+    return float(c[k]), mean_lo, mean_hi
+
+
+def ink_ratio(small: np.ndarray, params: dict | None = None) -> float:
+    """墨迹占比 = **非背景像素占比**（"这一页画了多少东西"），逐帧自适应门槛。
+
+    语义与四步判据见 INK_DEFAULTS 的注释；params 缺省时用默认参数（ink_params(None)），
+    消费方（segmenters/stable.py、scene.py）从 [segment] 段取参数后传进来。
+    """
+    p = params or ink_params(None)
+    x = np.asarray(small, dtype=np.float64).ravel()
+    white = float((x < p["ink_dark_thr"]).mean())
+    if not p["ink_adaptive"]:
+        return white                                    # 回退：与历史实现同式
+    bg = _ink_bg_level(x)
+    if bg >= p["ink_white_bg_min"]:
+        return white                                    # 白底帧：历史口径，浅色集零漂移
+    thr, mean_lo, mean_hi = _otsu_split(x)
+    if abs(mean_hi - mean_lo) < p["ink_otsu_min_sep"]:
+        return 0.0                                      # 两团分不开：纯色 / 渐变底 / 极低对比帧
+    return float((x > thr).mean() if bg < thr else (x < thr).mean())
 
 
 def sharpness(small: np.ndarray) -> float:

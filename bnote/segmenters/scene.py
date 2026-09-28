@@ -5,7 +5,7 @@
 """
 from __future__ import annotations
 
-from .framesig import frame_diff, hamming, ink_ratio, sharpness, signature
+from .framesig import frame_diff, hamming, ink_params, ink_ratio, sharpness, signature
 
 
 def segment(cfg, paths, frames, transcript, ocr, role_fn=None, page_roles=None):
@@ -16,11 +16,12 @@ def segment(cfg, paths, frames, transcript, ocr, role_fn=None, page_roles=None):
     th = float(cfg["segment"].get("scene_threshold", 0.04))
     gap = float(cfg["segment"].get("merge_max_gap_sec", 8.0))
 
+    inkp = ink_params(cfg.get("segment") or {})    # 墨迹门槛与 stable 同源（framesig.INK_DEFAULTS）
     sigs, cheap = [], []
     for f in frames:
         s = signature(paths.frames / f["file"], region)
         sigs.append(s)
-        cheap.append({"ink": ink_ratio(s[0]), "sharp": sharpness(s[0])})
+        cheap.append({"ink": ink_ratio(s[0], inkp), "sharp": sharpness(s[0])})
 
     picks = [0]
     for i in range(1, len(frames)):

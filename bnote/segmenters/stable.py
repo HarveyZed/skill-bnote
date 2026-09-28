@@ -22,7 +22,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 
-from .framesig import frame_diff, hamming, ink_ratio, sharpness, signature
+from .framesig import frame_diff, hamming, ink_params, ink_ratio, sharpness, signature
 
 
 def _norm_text(s: str) -> str:
@@ -74,6 +74,11 @@ def _is_additive(prev_small, cur_small, changed_max: float, old_ink_max: float) 
     """增量绘制判据：变化只发生在原本接近空白的区域 -> 同页动画，而不是换页。
 
     换页通常是整页重绘（变化区域大、且变化区域原本就有内容）。
+
+    注意这里的 `< 0.62` 是**固定阈值的历史口径**（`additive_old_ink_max=0.12` 是照它标定的），
+    与 ink_ratio 的逐帧自适应门槛**不是同一个量**：本判据只在 OCR 不可用时兜底
+    （`_why_same` 里 ocr_on 为真就先返回），改它会动"同页合并"的语义，不在本次范围。
+    深色主题下它与 ink 有同样的退化（判断恒为否），已记进 PACK-INK-ADAPTIVE 的未验证项。
     """
     import numpy as np
     d = np.abs(prev_small - cur_small)
@@ -130,6 +135,8 @@ def _mask_cells(masks, rows, cols):
 
 def _build_signals(cfg, paths, frames, masks=None, strokes=None, app=None):
     region = tuple(cfg["frames"].get("region") or (0, 0, 1, 1))
+    # 墨迹门槛逐帧自适应（深色主题下固定 0.62 会让 ink 恒为 1.0）：判据与实测见 framesig.INK_DEFAULTS
+    inkp = ink_params(cfg.get("segment") or {})
     sigs, cheap = [], []
     keep = None
     for f in frames:
@@ -138,7 +145,7 @@ def _build_signals(cfg, paths, frames, masks=None, strokes=None, app=None):
         sigs.append(s)
         if keep is None:
             keep = _mask_cells(masks, s[0].shape[0], s[0].shape[1])
-        cheap.append({"ink": ink_ratio(s[0][keep]) if keep is not None else ink_ratio(s[0]),
+        cheap.append({"ink": ink_ratio(s[0][keep], inkp) if keep is not None else ink_ratio(s[0], inkp),
                       "sharp": sharpness(s[0])})
     alpha = float(cfg["segment"].get("diff_alpha", 0.5))
     diffs = [0.0] + [frame_diff(sigs[i - 1], sigs[i], alpha) for i in range(1, len(sigs))]
@@ -467,9 +474,10 @@ def segment(cfg, paths, frames, transcript, ocr, role_fn=None, page_roles=("full
             pix = float(np.abs(a[keep] - b[keep]).mean())
             diffs.append(alpha * ham + (1 - alpha) * pix)
         cheap = []
+        inkp = ink_params(cfg.get("segment") or {})
         for s in sigs:
             sub = s[0][keep]
-            cheap.append({"ink": ink_ratio(sub), "sharp": sharpness(sub)})
+            cheap.append({"ink": ink_ratio(sub, inkp), "sharp": sharpness(sub)})
     runs = _stable_runs(diffs, fps, th, min_sec)
     cuts = _hard_cuts(diffs, cfg)
     if cfg["segment"].get("page_cut_only_cuts", True):
@@ -654,6 +662,8 @@ def segment(cfg, paths, frames, transcript, ocr, role_fn=None, page_roles=("full
         if a is not None and b is not None:
             ch = _np.abs(a - b) > 0.08
             ev["unchanged_frac"] = round(1.0 - float(ch.mean()), 3)
+            # 同样沿用**固定阈值的历史口径**（这两个数只是交给写手的旁证，不参与打分与页界：
+            # 改成自适应会让"变化区域里原本有多少墨迹"这句解释在深色主题下换个含义，本次不动）
             ev["old_ink"] = round(float((a[ch] < 0.62).mean()), 3) if ch.any() else 1.0
             ev["new_ink"] = round(float((b[ch] < 0.62).mean()), 3) if ch.any() else 1.0
         seg["boundary_evidence"] = ev
