@@ -3,7 +3,7 @@ name: bnote
 description: 把 B 站视频转成可读的 Markdown 学习资料——逐节讲义 lecture.md（按原时间轴、配幻灯片图）与单课笔记 note.md。当用户给出 B 站链接（BV 号或 URL，可能带分P）并要求以下任一项时使用：生成讲义或课程笔记、把视频变成可读文字、抽取 PPT 幻灯片页面、提取字幕、整理口播/播客类视频的字幕。不适用：只想要视频或音频文件（用 yt-dlp）、只想要一段简短摘要（本 skill 产出的是完整逐节资料）。
 license: MIT
 metadata:
-  version: 0.13.0
+  version: 0.14.0
   entrypoint: "scripts/bnote"
   requires: "Python>=3.10（解释器用 config/local.toml 的 [tools] python 或 BN_PYTHON 配置）；ffmpeg 由 imageio-ffmpeg 静态包提供；B 站登录态推荐（否则字幕退化为本地 ASR）"
   layout: "SKILL.md + references/（契约与 schema）+ scripts/（入口与工具）+ config/ + 代码包；运行期数据在 skill 之外的数据根"
