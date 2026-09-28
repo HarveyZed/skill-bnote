@@ -312,7 +312,10 @@ def analyze(cfg: dict, paths, media_path: Path, basis=None) -> dict:
         print("[measure] 按遮罩算：%d 个区域来自 %s → drawbox 涂掉后再 freezedetect/scdet"
               % (len(masks), (basis or {}).get("relpath") or _rel(paths, paths.overlay)))
     else:
-        print("[measure] 未按遮罩算（没有 cache/<vid>/overlay.json）：全画面参与 motion/freeze")
+        # 文案要跟 basis 对上（0.15.1）：取样模式读的是**取样包自己的**遮罩
+        # （cache/<vid>/sample/overlay.json），说整片那份路径会把人支到错文件。
+        print("[measure] 未按遮罩算（没有 %s）：全画面参与 motion/freeze"
+              % ("cache/<vid>/sample/overlay.json" if basis else "cache/<vid>/overlay.json"))
     with tempfile.TemporaryDirectory(prefix="bnote-measure-") as td:
         meta_file = str(Path(td) / "meta.txt")
         cmd = build_command(ffmpeg, media_path, cfg, meta_file, info["has_audio"],
