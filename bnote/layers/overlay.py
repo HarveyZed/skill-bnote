@@ -51,6 +51,33 @@ kind=handwriting 的区域。它**只用于把笔迹从 OCR 与帧差/墨迹里�
 跳过 handwriting，消费方要用 strokes() 拿判据参数逐帧重算。
 判据实现只有一份，在 segmenters/framesig.py 的 stroke_mask（叶子工具，两个消费方共用）。
 
+判据 4（M6）：pip_desync_motion（画中画讲师小窗）
+------------------------------------------------
+画中画讲师小窗（P33 的右上角真人、P25 的右下角卡通讲师）是**第三类固定区域**：它既不是
+烧录字幕（判据 1），也不是闪现的角状外物（判据 2）—— 它是**全程常驻**的独立画面。
+
+三条判据（**全部同时成立**才产出一条 kind=pip_window 的区域；每条的数字都进 evidence）：
+  ① **位置固定 / 面积稳定 / 长时间常驻**：小窗在整集里是同一个矩形。实现上把整幅按
+     ``pip_grid_cols`` 列等分成**跨帧固定的网格**，逐帧对在低分辨率剖面上量「每格的平均绝对差」，
+     得到每格的**活跃率** ``active_ratio``（有多少比例的帧对里这一格动了 > ``pip_cell_eps``）。
+     常驻 = 活跃率高（默认 ≥ ``pip_active_min`` = 0.5，即大部分时长都在动）。
+  ② **内容持续小幅变化（不是每帧全换）**：格的**典型变化幅度** ``amp_median`` 要落在
+     [``pip_amp_min``, ``pip_amp_max``] 区间里 —— 下界滤掉 JPEG 噪声级别的不动，
+     上界滤掉「整块换内容」（幻灯片换页、文档滚动）；同时把 **90 分位** ``amp_p90`` 也落盘，
+     复核者一眼能看出这条区域是"稳定小幅"还是"偶尔炸一下"。
+  ③ **与全帧变化事件不同步（关键的一条）**：把每帧对的**全帧平均绝对差**排成一条序列，
+     逐格算它与它的**皮尔逊相关** ``sync_corr``；小窗的帧间游走与"整屏滚动/换页"发生的时间
+     无关，所以 |corr| 小（默认 ≤ ``pip_sync_max`` = 0.6）；而**滚动文档自己的格子**在滚动帧对上
+     必然同步变化，corr ≈ 1（P33 取样包实测：小窗 4 格 |corr| ≤ 0.01，文档格 0.6~1.0）——
+     这一条就是把"独立运动的人脸窗"与"整屏滚动的文档"分开的那把刀。
+
+**面积上限**（``pip_max_area``，默认 0.25）：防止把「幻灯片里嵌入的视频」当成讲师小窗整块挖掉。
+超过上限就当判据不成立（写理由，不裁剪成一条含糊的区域）。
+
+**与已采信区域不重叠**：字幕带拟合出来的那几行（以及任何已采信区域的方框）里的格子**不参与**
+本判据 —— 烧录字幕同样是"位置固定 + 一直小幅变化"，但它已经被判据 1 认走了（P25 取样包的
+实测：不排掉会把字幕条当成 pip_window）。
+
 坐标系（**写错就是掩码错位**）
 --------------------------
 ``box`` 是相对坐标 ``[l, t, r, b]``，坐标空间是**抽帧后的画面**（``[frames].crop`` 之后、
@@ -84,7 +111,10 @@ BASIS = "cache/frames/index.json"
 
 # kind 枚举（取值**只能**来自这里）。handwriting 是 M4 新增：彩色细笔画 = 手写笔迹，
 # **只用于把它从 OCR 与帧差/墨迹里排除，交付图里照旧保留**。
-KINDS = ("caption_strip", "overlay_widget", "watermark", "progress_bar", "cursor", "handwriting")
+# pip_window 是 M6 新增：画中画讲师小窗（位置固定 + 长时间常驻 + 内容持续小幅变化 +
+# **与全帧变化事件不同步**）。它与另两类一样**整块挖**（不是按帧应用）。
+KINDS = ("caption_strip", "overlay_widget", "watermark", "progress_bar", "cursor",
+         "handwriting", "pip_window")
 
 PROFILE_W = 160                 # 低分辨率统计宽度（高度按源帧长宽比换算）
 LEGACY_W, LEGACY_H = 48, 27     # 旧判据（stable._detect_caption_strip）的签名分辨率，逐字沿用
@@ -128,6 +158,18 @@ def params(cfg: dict) -> dict:
         "widget_edge_min": float(ov.get("widget_edge_min", 0.03)),
         "widget_color_min": int(ov.get("widget_color_min", 6)),
         "widget_pad": float(ov.get("widget_pad", 0.008)),
+        # —— M6 新增：画中画讲师小窗（判据实现在本模块 pip_window_regions）——
+        # 每一条的语义与实测依据写在模块头「判据 4」；默认值的取舍写在 config/default.toml。
+        "pip_enabled": bool(ov.get("pip_enabled", True)),
+        "pip_grid_cols": int(ov.get("pip_grid_cols", 20)),
+        "pip_cell_eps": float(ov.get("pip_cell_eps", 0.004)),
+        "pip_active_min": float(ov.get("pip_active_min", 0.5)),
+        "pip_amp_min": float(ov.get("pip_amp_min", 0.0015)),
+        "pip_amp_max": float(ov.get("pip_amp_max", 0.12)),
+        "pip_sync_max": float(ov.get("pip_sync_max", 0.6)),
+        "pip_max_area": float(ov.get("pip_max_area", 0.25)),
+        "pip_min_cells": int(ov.get("pip_min_cells", 2)),
+        "pip_pairs_max": int(ov.get("pip_pairs_max", 40000)),
         # —— M4 新增：手写笔迹（判据实现在 segmenters/framesig.py）——
         "handwriting_enabled": bool(ov.get("handwriting_enabled", True)),
         "handwriting_stride": int(ov.get("handwriting_stride", 2)),
@@ -150,6 +192,29 @@ def rel_zones(zone: float):
             ("bottom-left", (0.0, 1.0 - z, z, 1.0)), ("bottom-right", (1.0 - z, 1.0 - z, 1.0, 1.0))]
 
 
+# ---------------------------------------------------------------- 画中画小窗的统计网格
+def cell_grid(fh: int, fw: int, cols: int):
+    """画中画判据的统计网格：整幅等分成 cols × rows 个格子（**跨帧固定**）。
+
+    为什么用格子而不是滑动窗：判据要落一条**全局矩形**区域（契约不落时间戳），格子能把
+    "哪一块在动"直接变成"哪些格子同时满足三条判据"，再做 4 连通分组取最大块。
+    cols 夹到不超过 fw —— 超过就会出现宽度为 0 的空片（那一格没有像素）。
+
+    返回 (label, ys, xs, rows, cols, counts)：label 是 (fh, fw) 的格子编号（bincount 用）、
+    ys/xs 是行/列边界（相对坐标换算要用）、counts 是每格的像素数（用来排除空片）。
+    """
+    cols = max(2, min(int(cols), int(fw)))
+    rows = max(2, int(round(cols * fh / float(fw))))
+    ys = np.linspace(0, fh, rows + 1).astype(np.int32)
+    xs = np.linspace(0, fw, cols + 1).astype(np.int32)
+    lab = np.zeros((fh, fw), dtype=np.int32)
+    for r in range(rows):
+        for c in range(cols):
+            lab[ys[r]:ys[r + 1], xs[c]:xs[c + 1]] = r * cols + c
+    counts = np.bincount(lab.ravel(), minlength=rows * cols).astype(np.float32)
+    return lab, ys, xs, rows, cols, counts
+
+
 # ---------------------------------------------------------------- 一遍扫帧
 def scan(frames_dir: Path, files: list, p: dict, app: dict | None = None) -> dict:
     """流式扫一遍已抽出的帧，攒出统计量（不落逐帧中间产物，内存只留剖面与各角最好的一帧）。
@@ -160,6 +225,9 @@ def scan(frames_dir: Path, files: list, p: dict, app: dict | None = None) -> dic
       chg   逐像素「变过的帧对比例」（FH×FW）
       widget 每个角「最像外物」的一帧 {hue, edge, crop, static}；heard 是各角过关的帧数
       legacy 旧判据的两条变化率 {rb, rm, n, ...}（48×27 口径，逐字搬过来）
+      pipD  逐帧对的**每格**平均绝对差（形状 帧对 × 格子数），pipG 是逐帧对的**全帧**平均绝对差；
+            pip_grid 是 (rows, cols, ys, xs, fh, fw, counts)。判据 4 只用这三条序列 ——
+            判据 1/2/3 一行都不读它们，所以**不改**既有判据的结果。
 
     **成本**：角状外物的证据必须**逐帧、近全分辨率**地量（工具条是闪现的，缩略图又数不出色板
     的色调档数——见 widget_regions 的说明），所以这一遍会比只看剖面贵一截；实测 p20（1547 帧）
@@ -183,6 +251,15 @@ def scan(frames_dir: Path, files: list, p: dict, app: dict | None = None) -> dic
     hsum = None
     hfrac_max = 0.0
     hframes = 0
+    # M6 画中画小窗：只收两条序列（每格平均绝对差 + 全帧平均绝对差），判据全部由它们算出来；
+    # pip_pairs_max 是内存上界（格子数 × 帧对 × 4 B）：超了就**不再收**并让判据报 insufficient，
+    # 不静默用半截序列判。
+    pd = [] if p["pip_enabled"] else None
+    pg = [] if p["pip_enabled"] else None
+    pip_grid = None
+    pip_lab = pip_cnt = None
+    pip_pairs = 0
+    pip_dropped = 0
     app_skipped = 0            # 因"整屏应用/录屏"而跳过手写判定的采样帧数（写进 evidence）
 
     thr = float(p["diff_threshold"]) * 0.6     # 旧实现的门槛：带内平均差 > 0.6×diff_threshold
@@ -218,6 +295,10 @@ def scan(frames_dir: Path, files: list, p: dict, app: dict | None = None) -> dic
         if sum_g is None:
             sum_g = np.zeros_like(fine)
             chg = np.zeros_like(fine)
+            if pd is not None:
+                pip_lab, _pys, _pxs, _prows, _pcols, pip_cnt = cell_grid(fh, PROFILE_W,
+                                                                       int(p["pip_grid_cols"]))
+                pip_grid = (_prows, _pcols, _pys, _pxs, fh, PROFILE_W, pip_cnt)
         if fine.shape != sum_g.shape:
             print("[overlay] 帧尺寸不一致（%s）→ 停止统计" % name)
             break
@@ -259,6 +340,16 @@ def scan(frames_dir: Path, files: list, p: dict, app: dict | None = None) -> dic
             d = np.abs(fine - prev_fine)
             rows.append(d.mean(axis=1))
             chg += (d > STATIC_EPS)
+            if pd is not None:
+                if pip_pairs < int(p["pip_pairs_max"]):
+                    # 每格平均绝对差：一次 bincount 把 (fh×fw) 的差分图按格子号求和（比逐格切片快）
+                    s = np.bincount(pip_lab.ravel(), weights=d.ravel().astype(np.float64),
+                                    minlength=pip_cnt.size).astype(np.float32)
+                    pd.append(s / np.maximum(pip_cnt, 1.0))
+                    pg.append(float(d.mean()))
+                    pip_pairs += 1
+                else:
+                    pip_dropped += 1
         if prev_legacy is not None:
             a, b = prev_legacy, legacy
             if float(np.abs(a[lb:LEGACY_H] - b[lb:LEGACY_H]).mean()) > thr:
@@ -269,12 +360,18 @@ def scan(frames_dir: Path, files: list, p: dict, app: dict | None = None) -> dic
         prev_fine, prev_legacy = fine, legacy
         n += 1
 
+    empty_pip = {"pipD": None, "pipG": None, "pip_grid": None, "pip_dropped": pip_dropped}
     if sum_g is None or not rows:
-        return {"R": None, "mean": None, "chg": None, "widget": {}, "heard": {},
-                "pairs": 0, "size": size, "legacy": None,
-                "stroke_sum": None, "stroke_frames": 0, "stroke_frac_max": 0.0,
-                "stroke_hits": [], "app_skipped": app_skipped}
+        out = {"R": None, "mean": None, "chg": None, "widget": {}, "heard": {},
+               "pairs": 0, "size": size, "legacy": None,
+               "stroke_sum": None, "stroke_frames": 0, "stroke_frac_max": 0.0,
+               "stroke_hits": [], "app_skipped": app_skipped}
+        out.update(empty_pip)
+        return out
     return {
+        "pipD": np.array(pd, dtype=np.float32) if pd else None,
+        "pipG": np.array(pg, dtype=np.float32) if pg else None,
+        "pip_grid": pip_grid, "pip_dropped": pip_dropped,
         "stroke_sum": hsum, "stroke_frames": hframes, "stroke_frac_max": hfrac_max,
         "stroke_hits": hw, "app_skipped": app_skipped,
         "R": np.array(rows, dtype=np.float32),
@@ -337,11 +434,16 @@ def fit_caption_band(R: np.ndarray, p: dict) -> dict:
             "content_rate": _band_rate(R, 0, max(1, lo - 1), thr)}
 
 
-def caption_region(R: np.ndarray, p: dict, legacy: dict):
-    """字幕带判据的汇总：候选带（拟合带 + 旧固定带），任一条过就产出一条 ``caption_strip``。"""
+def caption_region(R: np.ndarray, p: dict, legacy: dict, fit: dict | None = None):
+    """字幕带判据的汇总：候选带（拟合带 + 旧固定带），任一条过就产出一条 ``caption_strip``。
+
+    ``fit`` 只允许由调用方传``fit_caption_band(R, p)`` 的结果（判据 4 也要用同一条拟合带做
+    排除，重算一遍纯属浪费；**语义不变**，不传就照旧自己算）。
+    """
     mult = float(p["caption_band_multiple"])
     lo_gate = float(p["caption_rate_min"])
-    fit = fit_caption_band(R, p)
+    if fit is None:
+        fit = fit_caption_band(R, p)
     fh = fit["fh"]
 
     cands = []
@@ -384,6 +486,173 @@ def caption_region(R: np.ndarray, p: dict, legacy: dict):
                                    "criteria_name": "band_change_rate_fixed"}
     return {"kind": "caption_strip", "box": box, "confidence": round(conf, 2),
             "evidence": ev, "applicability": OK}
+
+
+# ---------------------------------------------------------------- 判据 4：画中画小窗
+def _series_corr(A: np.ndarray, g: np.ndarray) -> np.ndarray:
+    """A（帧对 × 若干列）的每一列与 g（帧对）的皮尔逊相关。
+
+    判据 ③ 的实现：g 是**全帧平均绝对差**（"整屏这一对帧变了多少"），一列是某一格/某个框的
+    平均绝对差。滚动文档自己的格子与 g 同步（corr ≈ 1 —— 它本来就是 g 的主要成分），
+    独立运动的人脸窗与 g 无关（corr ≈ 0）。**这条就是把两者分开的那把刀。**
+    """
+    if A.ndim == 1:
+        A = A.reshape(-1, 1)
+    n = int(A.shape[0])
+    if n < 3:
+        return np.zeros(A.shape[1], dtype=np.float32)
+    gs = g - float(g.mean())
+    ng = float(np.sqrt(float(gs @ gs)))
+    if ng <= 1e-12:                      # 全帧一直不动：没有"变化事件"可比，判不下来
+        return np.zeros(A.shape[1], dtype=np.float32)
+    Ac = A - A.mean(axis=0, keepdims=True)
+    na = np.sqrt((Ac * Ac).sum(axis=0))
+    den = na * ng
+    return np.where(den > 1e-12, (Ac * gs[:, None]).sum(axis=0) / np.maximum(den, 1e-12), 0.0)
+
+
+def _cell_components(mask: np.ndarray, rows: int, cols: int) -> list:
+    """格子的 4 连通分组（画中画在网格上是一个矩形块，允许中间被排除掉几格）。"""
+    seen = np.zeros(mask.size, dtype=bool)
+    groups = []
+    for start in np.flatnonzero(mask):
+        start = int(start)
+        if seen[start]:
+            continue
+        seen[start] = True
+        stack = [start]
+        cur = []
+        while stack:
+            i = stack.pop()
+            cur.append(i)
+            r, c = divmod(i, cols)
+            for dr, dc in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                rr, cc = r + dr, c + dc
+                if 0 <= rr < rows and 0 <= cc < cols:
+                    j = rr * cols + cc
+                    if mask[j] and not seen[j]:
+                        seen[j] = True
+                        stack.append(j)
+        groups.append(cur)
+    return groups
+
+
+def _pip_blocked(rows: int, cols: int, ys, xs, fh: int, fw: int,
+                 regions: list, fit: dict | None) -> np.ndarray:
+    """判据 4 **不参与**的格子：任何已采信区域的方框内 + 字幕带拟合出来的那几行。
+
+    为什么必须排除（不是洁癖，是 P25 取样包实测踩出来的）：烧录字幕同样满足「位置固定 +
+    长时间常驻 + 内容持续小幅变化 + 与全帧变化不同步」—— 不排掉就会先产出一条 caption_strip、
+    再产出一条盖在它上面的 pip_window。字幕带那几行的行号由判据 1 的**拟合带**给出
+    （不管它最后有没有过区域门槛，那是"这一带就是字幕"的最好现成证据）。
+    """
+    blocked = np.zeros(rows * cols, dtype=bool)
+    boxes = [r["box"] for r in (regions or [])
+             if r.get("applicability") == OK and isinstance(r.get("box"), list)
+             and len(r["box"]) == 4]
+    for r in range(rows):
+        cy = (float(ys[r]) + float(ys[r + 1])) / 2.0 / float(fh)
+        for c in range(cols):
+            cx = (float(xs[c]) + float(xs[c + 1])) / 2.0 / float(fw)
+            if any(b[0] <= cx <= b[2] and b[1] <= cy <= b[3] for b in boxes):
+                blocked[r * cols + c] = True
+    if fit:
+        y0, y1 = int(fit["y0"]), int(fit["y1"])
+        for r in range(rows):
+            cy = (float(ys[r]) + float(ys[r + 1])) / 2.0
+            if y0 <= cy <= y1:
+                blocked[r * cols:(r + 1) * cols] = True
+    return blocked
+
+
+def pip_window_regions(scan_out: dict, p: dict, fit: dict | None, regions: list) -> tuple:
+    """画中画讲师小窗（判据 4）：位置固定 + 长时间常驻 + 内容持续小幅变化 + **与全帧变化事件不同步**。
+
+    三条判据的数字全进 evidence（活跃率 / 幅度中位与 90 分位 / 与全帧变化的相关 / 面积占比 /
+    全帧变化事件数），复核者不用翻代码就能重算这条区域。判不出**不落区域**，返回一句带数字的
+    理由由 analyze 写进文档级 applicability（§3.4-3：不许静默返回空）。
+
+    坐标与置信：box 与另三类同空间（抽帧后画面的相对坐标）；置信由"活跃率离下限多远 +
+    |相关| 离上限多远"两个余量线性给出，范围 0.5~0.95。
+    """
+    apply_note = "整块挖（与字幕条一致）：帧差 / 墨迹 / 送 OCR 的图都不再读它"
+    if not p["pip_enabled"]:
+        return [], ("画中画小窗判据按配置关闭（[overlay].pip_enabled=false）；%s" % apply_note)
+    D = scan_out.get("pipD")
+    G = scan_out.get("pipG")
+    grid = scan_out.get("pip_grid")
+    dropped = int(scan_out.get("pip_dropped") or 0)
+    if dropped and D is None:
+        return [], ("画中画小窗判据不成立（帧对数超过 pip_pairs_max=%d，有 %d 对没统计；%s）"
+                    % (int(p["pip_pairs_max"]), dropped, apply_note))
+    pairs = 0 if D is None else int(D.shape[0])
+    if D is None or G is None or grid is None or pairs < 8:
+        return [], "画中画小窗判据不成立（可用帧对只有 %d，少于 8）" % pairs
+
+    rows, cols, ys, xs, fh, fw, cnt = grid
+    amin, amax = float(p["pip_amp_min"]), float(p["pip_amp_max"])
+    act_min, smax = float(p["pip_active_min"]), float(p["pip_sync_max"])
+    eps = float(p["pip_cell_eps"])
+    blocked = _pip_blocked(rows, cols, ys, xs, fh, fw, regions, fit)
+    valid = (cnt > 0) & (~blocked)
+    act = (D > eps).mean(axis=0)
+    amp = np.median(D, axis=0)
+    amp90 = np.percentile(D, 90, axis=0)
+    cc = _series_corr(D, G)
+    mask = (valid & (act >= act_min) & (amp >= amin) & (amp <= amax)
+            & (np.abs(cc) <= smax))
+    groups = [g for g in _cell_components(mask, rows, cols) if len(g) >= int(p["pip_min_cells"])]
+    if not groups:
+        return [], ("画中画小窗判据不成立（%d 个格子里只有 %d 格长时间在动，没有同时满足"
+                    "「活跃率 ≥ %.2f + 幅度中位在 [%.4f, %.4f] + |与全帧变化的相关| ≤ %.2f」的连通块；%s）"
+                    % (int(valid.sum()), int((valid & (act >= act_min)).sum()), act_min,
+                       amin, amax, smax, apply_note))
+
+    gi = max(groups, key=len)
+    rr = [i // cols for i in gi]
+    ccs = [i % cols for i in gi]
+    r0, r1, c0, c1 = min(rr), max(rr), min(ccs), max(ccs)
+    box = [round(float(xs[c0]) / float(fw), 4), round(float(ys[r0]) / float(fh), 4),
+           round(float(xs[c1 + 1]) / float(fw), 4), round(float(ys[r1 + 1]) / float(fh), 4)]
+    area = (box[2] - box[0]) * (box[3] - box[1])
+    if area > float(p["pip_max_area"]):
+        return [], ("画中画小窗判据不成立（候选区域 %s 面积 %.4f 超过上限 %.2f —— 面积这么大的"
+                    "「独立运动块」更像幻灯片里嵌入的视频或整屏动画，整块挖会伤正文；%s）"
+                    % (box, area, float(p["pip_max_area"]), apply_note))
+
+    sel = np.array(gi, dtype=np.int64)
+    sub = D[:, sel].mean(axis=1)
+    act_b = float((sub > eps).mean())
+    amp_b = float(np.median(sub))
+    amp90_b = float(np.percentile(sub, 90))
+    cc_b = float(_series_corr(sub, G)[0])
+    ghi = G >= np.percentile(G, 75)
+    share = 0.0
+    if float(G[ghi].mean()) > 1e-9:
+        share = float(sub[ghi].mean() / float(G[ghi].mean())) * area
+    if act_b < act_min or not (amin <= amp_b <= amax) or abs(cc_b) > smax:
+        return [], ("画中画小窗判据不成立（候选框 %s 复核不过：活跃率 %.3f（下限 %.2f）/ "
+                    "幅度中位 %.5f（区间 [%.4f, %.4f]）/ |与全帧变化的相关| %.3f（上限 %.2f）；%s）"
+                    % (box, act_b, act_min, amp_b, amin, amax, abs(cc_b), smax, apply_note))
+
+    m_act = min(1.0, max(0.0, (act_b - act_min) / max(1e-6, 1.0 - act_min)))
+    m_sync = min(1.0, max(0.0, (smax - abs(cc_b)) / max(1e-6, smax)))
+    conf = float(min(0.95, max(0.5, 0.5 + 0.25 * m_act + 0.25 * m_sync)))
+    ev = {"criterion": "pip_desync_motion",
+          "cells": len(gi), "cells_valid": int(valid.sum()), "grid": [rows, cols],
+          "active_ratio": round(act_b, 4), "active_min": act_min,
+          "amp_median": round(amp_b, 5), "amp_p90": round(amp90_b, 5),
+          "amp_min": amin, "amp_max": amax,
+          "sync_corr": round(cc_b, 4), "sync_max": smax,
+          "cell_eps": eps, "area_ratio": round(area, 4),
+          "change_share": round(share, 4),
+          "global_change_median": round(float(np.median(G)), 5),
+          "global_events": int(ghi.sum()), "pairs": pairs,
+          "blocked_cells": int(blocked.sum()),
+          "note": "位置固定 + 长时间常驻 + 内容持续小幅变化 + 与全帧变化事件不同步（三条同时成立）；"
+                  "change_share = 高变化帧对上这条区域占全帧变化量的份额（越小越「独立」）"}
+    return [{"kind": "pip_window", "box": box, "confidence": round(conf, 2),
+             "evidence": ev, "applicability": OK}], None
 
 
 # ---------------------------------------------------------------- 判据 2：角状外物
@@ -609,7 +878,10 @@ def _params_doc(p: dict) -> dict:
         "caption_row_multiple", "caption_row_gap",
         "widget_enabled", "widget_zone", "widget_changed_max", "widget_samples",
         "widget_min_area", "widget_max_area", "widget_edge_min", "widget_color_min",
-        "widget_pad", "handwriting_enabled", "handwriting_stride", "handwriting_min_frac",
+        "widget_pad",
+        "pip_enabled", "pip_grid_cols", "pip_cell_eps", "pip_active_min", "pip_amp_min",
+        "pip_amp_max", "pip_sync_max", "pip_max_area", "pip_min_cells", "pip_pairs_max",
+        "handwriting_enabled", "handwriting_stride", "handwriting_min_frac",
         "handwriting_min_frames", "handwriting_pad", *STROKE_DEFAULTS.keys())}
 
 
@@ -629,6 +901,7 @@ def analyze(cfg: dict, paths, frames=None, basis=None) -> dict:
     frames_min = int((cfg.get("overlay") or {}).get("frames_min", 24))
 
     regions = []
+    pip_regs = []
     applies = []
     size = None
     if len(files) < frames_min:
@@ -639,11 +912,18 @@ def analyze(cfg: dict, paths, frames=None, basis=None) -> dict:
         if out["R"] is None or out["pairs"] < 8:
             applies.append("可用帧对只有 %d，变化率判据不成立" % out["pairs"])
         else:
-            cap = caption_region(out["R"], p, out["legacy"])
+            # 字幕带的**拟合带**只算一遍：判据 1 用它产区域，判据 4 用它排除字幕那几行
+            fit = fit_caption_band(out["R"], p)
+            cap = caption_region(out["R"], p, out["legacy"], fit=fit)
             if cap:
                 regions.append(cap)
             else:
                 applies.append("底部带变化率未过阈值（字幕条判据不成立）")
+            if p["pip_enabled"]:
+                pip_regs, pip_reason = pip_window_regions(out, p, fit, regions)
+                regions.extend(pip_regs)
+                if pip_reason:
+                    applies.append(pip_reason)
             if p["widget_enabled"]:
                 regions.extend(widget_regions(paths, files, out, p))
             if p["handwriting_enabled"]:
@@ -670,6 +950,10 @@ def analyze(cfg: dict, paths, frames=None, basis=None) -> dict:
     if hw:
         note += ("；另有 %d 条 handwriting 区域（手写笔迹）：**不整块挖、不计入遮罩面积**，"
                  "消费方按 params 的 handwriting_* 判据逐帧重算笔画掩膜" % len(hw))
+    if pip_regs:
+        note += ("；另有 %d 条 pip_window 区域（画中画讲师小窗）：**整块挖**（与字幕条一致），"
+                 "判据与数字见该区域的 evidence（位置固定 + 长时间常驻 + 内容持续小幅变化 + "
+                 "与全帧变化事件不同步）" % len(pip_regs))
     area = sum(max(0.0, (r["box"][2] - r["box"][0]) * (r["box"][3] - r["box"][1]))
                for r in boxed)
     return {
