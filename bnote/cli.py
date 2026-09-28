@@ -6,6 +6,7 @@
   bnote slides <BV|URL>        L4+L5+L6 抽帧/切片/OCR
   bnote overlay <BV|URL>       M3 遮挡区识别（烧录字幕条 / 角状外物：工具条·水印·进度条）
   bnote measure <BV|URL>       L4.5 媒体验测（零 token：逐秒运动/切点/冻结/静音，M3 起按遮罩算）
+  bnote sample  <BV|URL>       M5 取样包（片头/中段/片尾各一小段 → cache/<vid>/sample/，判型用）
   bnote sheet  <BV|URL>        M2 读字面板：若干帧拼成一张只烧序号的索引图 + 行列→t 映射
   bnote frames <BV|URL>        M2 按时间取帧：--at 给最近一帧+前后各一帧；--read 给全分辨率单帧
   bnote bundle <BV|URL>        L7 交付物
@@ -38,6 +39,7 @@ from .layers import xref as xref_layer
 from .layers import bundle as bundle_layer
 from .layers import frames as frames_layer
 from .layers import measure as measure_layer
+from .layers import sample as sample_layer
 from .layers import media as media_layer
 from .layers import merge as merge_layer
 from .layers import glossary as glossary_layer
@@ -104,6 +106,8 @@ def _ctx(args):
     p = cfg["paths"]
     remedy = ("bnote stream <URL> --page %s   # 信息流/口播类（无幻灯片）" % page
               if cmd in ("stream", "note") else
+              "bnote fetch <URL> --page %s    # 取样包要 meta.json 里的时长，先取数" % page
+              if cmd in ("sample", "triage") else
               "bnote run <URL> --page %s      # 幻灯片模式；口播/播客类改用 bnote stream" % page)
     if cmd not in _NO_DATA_OK and not (WorkPaths(cfg, vid).meta).exists():
         raise SystemExit(
@@ -589,6 +593,17 @@ def cmd_measure(args):
     return 0
 
 
+def cmd_sample(args):
+    """M5 取样包：只下几个短窗口（默认片头/中段/片尾各 [sample].window_sec）→ 取样帧 + 索引。
+
+    产物只落 cache/<vid>/sample/（私有根）：cache/frames/index.json、顶层 overlay.json 与
+    measure.json 一行不动。判型（triage）与信息流画面旁证都消费它；覆盖口径会打印一行。
+    """
+    cfg, paths, vid = _ctx(args)
+    sample_layer.run(cfg, paths, force=args.force, window_sec=args.window_sec)
+    return 0
+
+
 def cmd_frames(args):
     """M2 按时间取帧：--at HH:MM:SS 给该时刻最近的一帧 + 前后各一帧（含路径与 t）；
 
@@ -716,6 +731,11 @@ def build_parser():
     sp = sub.add_parser("measure", help="零 token 媒体验测：逐秒运动 + 切点/冻结段/静音段 → cache/<vid>/measure.json")
     common(sp)
     sp.set_defaults(func=cmd_measure)
+
+    sp = sub.add_parser("sample", help="M5 取样包：片头/中段/片尾各下一小段 → cache/<vid>/sample/（判型与信息流旁证用）")
+    common(sp)
+    sp.add_argument("--window-sec", type=float, default=None, help="每个取样窗口的秒数（默认取 [sample].window_sec）")
+    sp.set_defaults(func=cmd_sample)
 
     sp = sub.add_parser("frames", help="M2 按时间取帧：--at HH:MM:SS 给最近一帧+前后各一帧；--read 给全分辨率单帧路径")
     common(sp)

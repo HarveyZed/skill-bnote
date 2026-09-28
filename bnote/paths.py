@@ -11,6 +11,7 @@ cache/<vid>/            中间产物（可随时整体删除）
   measure.json          媒体验测结果（M1：逐秒桶 + 切点/冻结/静音，零 token）
   ocr/                  OCR 结果缓存（按帧内容哈希）
   segments.json         切片结果（核心中间产物）
+  sample/               M5 取样包（判型/信息流旁证）：media/ + frames/ + index.json + overlay.json + measure.json
 out/<vid>/              交付物（Markdown + 图片）—— **内部结构冻结**，正文用 ../slides/NNNN.jpg 相对引用
   transcript.md
   slides/NNNN.jpg
@@ -49,6 +50,22 @@ class WorkPaths:
     def segments(self) -> Path: return self.cache / "segments.json"
     @property
     def measure(self) -> Path: return self.cache / "measure.json"
+
+    # M5 取样包（契约 §3.6）：判型 / 信息流旁证用的少量窗口取样帧，**自成私有根**。
+    # 单开一个根的两个理由：取样媒体若落进 cache/<vid>/media/ 会被 media.find_media() 当整片复用；
+    # 顶层 overlay.json / measure.json 是「整片 2fps」的产物，不能被取样结果覆盖。
+    @property
+    def sample(self) -> Path: return self.cache / "sample"
+    @property
+    def sample_media(self) -> Path: return self.sample / "media"
+    @property
+    def sample_frames(self) -> Path: return self.sample / "frames"
+    @property
+    def sample_index(self) -> Path: return self.sample / "index.json"
+    @property
+    def sample_overlay(self) -> Path: return self.sample / "overlay.json"
+    @property
+    def sample_measure(self) -> Path: return self.sample / "measure.json"
     @property
     def overlay(self) -> Path: return self.cache / "overlay.json"
 

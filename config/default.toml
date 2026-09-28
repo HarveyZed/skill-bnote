@@ -223,6 +223,20 @@ freeze_min_sec     = 0.5      # freezedetect 的最短冻结时长
 silence_noise_db   = -35      # silencedetect 的静音门限（dB）
 silence_min_sec    = 0.5      # silencedetect 的最短静音时长
 
+[sample]
+# M5 取样包（bnote sample）：判型与信息流画面旁证用的「少量窗口取样帧」。
+# 一次 yt-dlp 下载若干短窗口 → ffmpeg 定频抽帧 → cache/<vid>/sample/（**私有根**：
+# 绝不写 cache/<vid>/media/、cache/frames/index.json 或顶层 overlay.json / measure.json）。
+# 只由显式 bnote sample 触发；enabled 是给未来自动路径预留的（显式命令不受它拦，同 [sheet]）。
+enabled              = false  # true 才允许未来自动路径跑；显式 bnote sample 不受此拦
+window_sec           = 30.0   # 每个取样窗口的秒数（20–60；片长更短则退化成整段一个窗口）
+window_anchors       = [0.10, 0.50, 0.90]  # 片头 / 中段 / 片尾的锚点（取窗口起点、夹取到片长内）
+fps                  = 1.0    # 取样抽帧频率（判型只要形态；比整片 2fps 省一半以上）
+scale_height         = 720    # 取样帧缩放高度（0 = 不缩放）
+max_height           = 720    # 取样下载的画质上限（比整片低一档，省流量）
+dur_tol_sec          = 0.5    # 拼接实测时长与「请求窗口之和」的容差（yt-dlp 多段是分别下载再拼接）
+first_frame_tol_sec  = 1.0    # 每个窗口首帧 t 与窗口起点的容差（应 >= 1/fps）
+
 [sheet]
 # M2 读字面板（bnote sheet）：把若干帧拼成一张**只烧序号**的索引图 →
 # out/<vid>/_meta/sheets/<name>.png + out/<vid>/_meta/sheet.json（行列→帧→t 的权威映射只在 JSON 里）。
