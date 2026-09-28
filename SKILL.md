@@ -185,6 +185,8 @@ collect    把 _meta/patch/<章号>.json 汇总进 manifest（多写手并发时
            搬进**每章**的 slideset_id 与顶层汇总（没有补丁也会写盘）
 retime     按 slides.json 幂等重写小节时间行（时间由工具生成，写手不写时间）
 check      结构校验；--chapter 06,07 限定作用域（写手自检用）。含切片身份：顶层指纹不符 = 整集错版（error）、
+           M5 起信息流模式也校图引用：不在两类白名单内 / 引用的面板名不在 sheet.json ∪ sheet_sample.json 的 tiles 里 → error；
+           面板配额超 [sheet].max_stream → warn（只扫 lecture.md、按整集时长、不拦流程）。t 一致性仍只在 sheet.verify() 查
            某章指纹不符 = 该章需重派写手（error）、逐页图片 sha256 不符 = 图被替换（error）、
            缺指纹的存量产物与 remap 留痕 = warn
            M4 角色（§3.5-2）：段内存在可当主图的候选（full_page / app_screen）却选了别的 = error

@@ -18,6 +18,9 @@ import json
 import re
 from pathlib import Path
 
+from .. import tools
+from . import refs as refs_layer
+
 NL = "\n"
 ANCHOR_RE = re.compile(r"^##\s*\[(\d{1,2}:\d{2}(?::\d{2})?)\]\s*(.+)$", re.M)
 
@@ -345,6 +348,54 @@ def _anchor_drift_warns(cfg, paths, paras: list, md: str) -> list:
     return warns
 
 
+def _ref_errors(md: str, paths) -> list:
+    """信息流模式的图片引用校验（M5，§3.6-5）——**只查"能不能定位"**。
+
+    两条：① 引用不在两类白名单内（复用 `refs.unknown_targets`，**不另写正则**）；
+    ② 引用的面板名在 `sheet.json` ∪ `sheet_sample.json` 的 `tiles[].sheet` 里查不到。
+
+    **t 与索引的一致性不在这里重复实现**：正文里只有路径、没有时间，结构上查不了；它归
+    `sheet.verify()`（对照 `doc["basis"]` 指向的索引，容差 1e-6）——同一件事只留一个真源，
+    否则两边漂移时没人知道该信谁。
+    """
+    out, seen = [], set()
+    for target in refs_layer.unknown_targets(md):
+        out.append({"level": "error", "owner": "text",
+                    "message": ("图片引用不在两类白名单内：%s（只认 ../slides/NNNN.jpg 与 "
+                                "../_meta/sheets/<name>.png）" % target)})
+    panels = refs_layer.iter_refs(md, "sheet")
+    if panels:
+        known = tools.panel_names(paths.meta_dir())
+        for r in panels:
+            if r.name in known or r.name in seen:
+                continue
+            seen.add(r.name)
+            out.append({"level": "error", "owner": "text",
+                        "message": "引用了读字面板 %s，但 sheet.json / sheet_sample.json 里没有它的 tile"
+                                   "（跑 bnote sheet 生成面板，或删掉这条引用）" % r.name})
+    return out
+
+
+def _quota_warns(cfg, paths, md: str) -> list:
+    """画面旁证的配额（M5）：**只扫 lecture.md**（拼装后的权威稿），时间基 = 整集时长。
+
+    不并扫 `text/NN.md`：那是中间稿，同一处引用会被双计，而且两种修法不同（重跑 assemble
+    vs 重写该块）。超限只 **warn**（不拦 merge）——这是预算提醒，不是结构错误。
+    """
+    names = {r.name for r in refs_layer.iter_refs(md, "sheet")}
+    if not names:
+        return []
+    cap = int((cfg.get("sheet") or {}).get("max_stream", 4))
+    total = len(names)
+    if total <= cap:
+        return []
+    dur = float(((paths.read_json(paths.meta, None) or {}).get("duration")) or 0)
+    return [{"level": "warning", "owner": "pipeline",
+             "message": "信息流正文引用了 %d 张面板（去重后），超过上限 [sheet].max_stream=%d"
+                        "（整集时长 %s）—— 预算问题，不拦流程：删掉不必要的图，或调上限"
+                        % (total, cap, ("%.0f s" % dur) if dur else "未知")}]
+
+
 def validate(cfg, paths) -> tuple:
     """结构校验：只校能不能定位，不判内容好坏（内容看契约）。"""
     errors, warns = [], []
@@ -404,6 +455,8 @@ def validate(cfg, paths) -> tuple:
             warns.append({"level": "warning", "owner": "text",
                           "message": "段落锚点只有 %d 个（工具给了 %d 段）—— 合并得有点狠，确认没有漏讲" % (len(found), len(paras))})
         warns += _anchor_drift_warns(cfg, paths, paras, md)
+        errors += _ref_errors(md, paths)      # M5：引用能不能定位（t 一致性见 sheet.verify）
+        warns += _quota_warns(cfg, paths, md)  # M5：信息流面板配额（只 warn）
     return errors, warns
 
 

@@ -188,6 +188,28 @@ def _probe_with_ffmpeg(ffmpeg: str, media_path) -> dict:
 FULL_BASIS = "cache/frames/index.json"
 
 
+def panel_names(meta_dir) -> set:
+    """out/<vid>/_meta/ 下两份面板清单里的面板文件名**并集**（M5，§3.6-3）。
+
+    整片面板写 sheet.json、取样面板写 sheet_sample.json（两个 basis 装不进一个文件）。
+    **只用于"面板存在性"判定**：白名单路径不变（仍只认 ../_meta/sheets/<name>.png）。
+    放中性工具的理由同 sha256：manifest（幻灯片模式）与 text（信息流模式）都要用同一份，
+    两处各写一份必然漂移。
+    """
+    out = set()
+    for name in ("sheet.json", "sheet_sample.json"):
+        p = Path(meta_dir) / name
+        if not p.exists():
+            continue
+        try:
+            doc = json.loads(p.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            continue
+        if isinstance(doc, dict):
+            out |= {str(t.get("sheet")) for t in (doc.get("tiles") or []) if isinstance(t, dict)}
+    return out
+
+
 def check_basis_dest(dest, basis, full_name: str, sample_name: str,
                      full_dir=None, sample_dir=None) -> None:
     """写前断言（复核 2026-09-28 裁定 (b)，2026-09-28 补目录比对）：目标必须与 basis 对得上。

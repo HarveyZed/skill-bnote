@@ -29,6 +29,7 @@ import shutil
 import time
 from pathlib import Path
 
+from .. import tools
 from . import refs as refs_layer
 from . import roles as roles_layer       # 可当主图的角色（PAGE_ROLES）单点定义在这里
 from . import slideset as slideset_layer
@@ -179,15 +180,15 @@ def _warn(msg: str, owner: str = "manifest", chapter: str | None = None,
 
 
 def _panel_names(paths) -> set:
-    """_meta/sheet.json 里有 tile 的面板文件名集合（没有产物时为空集）。
+    """有 tile 的面板文件名集合（没有产物时为空集）。
 
     正文引用的读字面板必须在这里查得到 —— 否则读者拿到一张谁也不能解释的图
-    （面板只作索引，权威映射只在 sheet.json，见 layers/refs.py 与 body-contract）。
+    （面板只作索引，权威映射在 sheet.json / sheet_sample.json，见 layers/refs.py 与 body-contract）。
+
+    **M5 起是并集**：整片 sheet.json ∪ 取样 sheet_sample.json（实现见 tools.panel_names）。
+    放宽的只是"**面板存在性**"这件事；白名单路径没放宽（仍只认 ../_meta/sheets/<name>.png）。
     """
-    doc = paths.read_json(paths.meta_dir() / "sheet.json", None)
-    if not isinstance(doc, dict):
-        return set()
-    return {str(t.get("sheet")) for t in (doc.get("tiles") or []) if isinstance(t, dict)}
+    return tools.panel_names(paths.meta_dir())
 
 
 def _short_sid(s: str) -> str:
