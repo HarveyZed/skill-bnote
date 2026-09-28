@@ -25,23 +25,24 @@ schema / vid / algo / source / params / regions / applicability / stats）。
    拟合带比固定 14% 带贴合得多（固定带被同一带里的静止行稀释），这是 BV1CCtz6WEvF_p1 从
    ``rb≈0.1375`` 不触发翻成触发的机械原因。
 
-2. ``corner_static_glyphs``：角状外物（标注工具条 / 水印 / 进度条 / 鼠标）。三条同时成立：
-   ① **位置固定在边角**（四个角各一个 ``widget_zone`` 边长的搜索窗）；
-   ② **帧间几乎不变**（窗内逐像素「变过的帧对比例」均值 < ``widget_changed_max``）；
-   ③ **有细小字符或色块** —— 在**全分辨率**的若干帧上量两条：梯度密度 ``edge_frac`` 与
-      显著色块色调数 ``color_patches``（饱和度 > 0.35、亮度 > 0.35 的像素按 30° 分成 12 档，
-      每档像素数达窗内 0.4% 才计一档）。
+2. ``transient_overlay``：**临时出现**的遮挡（闪现的标注工具条 / 菜单 / 进度条 / 鼠标），
+   判据按**瞬态性**判、不按种类（见 framesig.TRANSIENT_DEFAULTS 的完整说明与全部实测数字）：
 
-   **为什么 ③ 必须回到全分辨率**：工具条的文字行在 160 宽的缩略图上只剩 1~2 像素，梯度被
-   抹平（实测 p20 工具条在时间均值图上的 edge≈0），而幻灯片里表格的梯度反而更高 ——
-   低分辨率分不开这两者。真正分得开的是**色块色调数**：实测标注工具条 6~7 档（激光笔/笔/
-   荧光笔/橡皮擦 + 一排色板），而幻灯片内容（表格、代码、手写）只有 1~3 档。
-   两条都要求（AND）是有意的：幻灯片表格的梯度比工具条更高，只用梯度会把表格挖掉。
+   * **一筛**（搭在下面 scan 已有的逐帧解码上，增量≈0）：每帧每角算三个数 —— 角窗对
+     **时域中位**的平均绝对残差 ``resid``、同一中位的**整帧**残差 ``frame_resid``（换页帧的
+     守卫）与角窗的梯度密度 ``edge``（纹理守卫）；三个门槛都过才是候选帧。
+   * **二筛**（只对候选帧回 ~480 宽复核）：角窗里"显著色块色调档数" ``color_patches`` >=
+     ``transient_color_min``。这一条是**区分工具条与幻灯片自己内容**的那把刀：实测工具条
+     7~10 档（笔色 + 一排色板），幻灯片上的文字框 / 逐条动画元素只有 0~2 档。
+   * **瞬态门槛**：命中帧占整集的比例 <= ``transient_max_ratio``（默认 0.2）才产出区域；
+     超过就打印「出现率 x% > 阈值 → 按常驻处理，不动」。水印 / 常驻画中画走的就是这一条
+     （另有"跨页不变量 + 纹理"的常驻检测，只用于报数，不进门槛）。
 
-   收紧方框用**同内容帧组的交集**：整集均匀取若干帧，以「最像外物」的那帧为样板，挑出与样板
-   内容几乎相同的帧（同内容帧组），组内各帧的「梯度或显著色块」掩膜求交 —— 工具条的
-   文字与色板帧帧相同（留得下），幻灯片内容逐页重画（被交掉）；组里只有 1 帧就说明这东西
-   只出现过一次，按幻灯片内容处理。
+   **旧判据 ``corner_static_glyphs`` 整族已删**（连同它的 8 个 ``widget_*`` 参数）：它要求
+   "帧间几乎不变 + 色调档数 >= 6"，而 p20/p21/p22/P48 全帧四角的色调档数**上限是 3** ——
+   门槛不可达，判据在真实样本上永远产不出区域（实测 p20 1547 / p21 3244 / p22 2802 /
+   P48 1385 帧四角命中全 0）。修正后的判据在同样这 4 集上给出 p20=3、p21=8、p22=11 帧
+   （与逐帧目视过的真值逐个相同），P48–P53 干净集只有 p51 的 7 帧真例（桌面右键菜单）。
 
 M4 新增判据 3：color_stroke（手写笔迹）
 ----------------------------------------
@@ -98,8 +99,11 @@ from PIL import Image
 
 # 彩色细笔画（手写笔迹）判据的实现放在 segmenters/framesig.py（叶子工具）：它同时被本模块
 # （产出手写区域）与 stable.py 的签名（把笔迹从帧差里挖掉）用。一份实现两处用，避免漂移。
-from ..segmenters.framesig import (STROKE_DEFAULTS, app_params, app_screen_metrics,
-                                   stroke_mask, stroke_params)
+from ..segmenters.framesig import (STROKE_DEFAULTS, TRANSIENT_DEFAULTS,
+                                   TRANSIENT_SMALL, TRANSIENT_TEX,
+                                   app_params, app_screen_metrics, color_patch_bins, corner_rect,
+                                   corner_zones, edge_density, stroke_mask, stroke_params,
+                                   transient_overlay_corners, transient_params)
 
 from ..tools import check_basis_dest
 
@@ -113,16 +117,11 @@ BASIS = "cache/frames/index.json"
 # **只用于把它从 OCR 与帧差/墨迹里排除，交付图里照旧保留**。
 # pip_window 是 M6 新增：画中画讲师小窗（位置固定 + 长时间常驻 + 内容持续小幅变化 +
 # **与全帧变化事件不同步**）。它与另两类一样**整块挖**（不是按帧应用）。
-KINDS = ("caption_strip", "overlay_widget", "watermark", "progress_bar", "cursor",
-         "handwriting", "pip_window")
+KINDS = ("caption_strip", "transient_overlay", "handwriting", "pip_window")
 
 PROFILE_W = 160                 # 低分辨率统计宽度（高度按源帧长宽比换算）
 LEGACY_W, LEGACY_H = 48, 27     # 旧判据（stable._detect_caption_strip）的签名分辨率，逐字沿用
 STATIC_EPS = 0.04               # 逐像素「变了」的判定：平均绝对差超过它才算变
-EDGE_EPS = 0.08                 # 全分辨率梯度「有边」的判定（灰度 0..1）
-SAT_MIN, VAL_MIN = 0.35, 0.35   # 显著色块：饱和度与亮度下限
-HUE_BINS = 12                   # 色调按 30° 分档
-SAME_EPS = 0.03                 # 两帧同一区域"内容相同"的判定（平均绝对差上限）
 
 OK = "ok"
 INSUFFICIENT = "insufficient"
@@ -149,15 +148,10 @@ def params(cfg: dict) -> dict:
         "caption_min_rows": int(ov.get("caption_min_rows", 2)),
         "caption_row_multiple": float(ov.get("caption_row_multiple", 2.5)),
         "caption_row_gap": int(ov.get("caption_row_gap", 0)),
-        "widget_enabled": bool(ov.get("widget_enabled", False)),
-        "widget_zone": float(ov.get("widget_zone", 0.30)),
-        "widget_changed_max": float(ov.get("widget_changed_max", 0.05)),
-        "widget_samples": int(ov.get("widget_samples", 40)),
-        "widget_min_area": float(ov.get("widget_min_area", 0.004)),
-        "widget_max_area": float(ov.get("widget_max_area", 0.09)),
-        "widget_edge_min": float(ov.get("widget_edge_min", 0.03)),
-        "widget_color_min": int(ov.get("widget_color_min", 6)),
-        "widget_pad": float(ov.get("widget_pad", 0.008)),
+        # —— 临时遮挡（判据实现在 segmenters/framesig.transient_overlay_corners）——
+        # 键名与默认值的**唯一真源**在 framesig.TRANSIENT_DEFAULTS；这里只是把 [overlay] 段的
+        # 覆盖值搬进产物 params（消费方从 overlay.json 读，文件即接口）。
+        **transient_params(ov),
         # —— M6 新增：画中画讲师小窗（判据实现在本模块 pip_window_regions）——
         # 每一条的语义与实测依据写在模块头「判据 4」；默认值的取舍写在 config/default.toml。
         "pip_enabled": bool(ov.get("pip_enabled", True)),
@@ -183,13 +177,6 @@ def params(cfg: dict) -> dict:
 def _enabled(cfg: dict) -> bool:
     ov = cfg.get("overlay") or {}
     return bool(ov.get("enabled", True)) and bool((cfg.get("segment") or {}).get("auto_caption_strip", True))
-
-
-def rel_zones(zone: float):
-    """四个角的相对坐标搜索窗（与剖面网格无关，直接是画面相对坐标）。"""
-    z = float(zone)
-    return [("top-left", (0.0, 0.0, z, z)), ("top-right", (1.0 - z, 0.0, 1.0, z)),
-            ("bottom-left", (0.0, 1.0 - z, z, 1.0)), ("bottom-right", (1.0 - z, 1.0 - z, 1.0, 1.0))]
 
 
 # ---------------------------------------------------------------- 画中画小窗的统计网格
@@ -223,17 +210,19 @@ def scan(frames_dir: Path, files: list, p: dict, app: dict | None = None) -> dic
       R     逐帧对的**逐行**平均绝对差，形状 (pairs, FH)
       mean  逐像素时间均值（灰度，FH×FW）
       chg   逐像素「变过的帧对比例」（FH×FW）
-      widget 每个角「最像外物」的一帧 {hue, edge, crop, static}；heard 是各角过关的帧数
+      small 逐帧 **48x27 灰度剖面**（(n,27,48) float32）—— 临时遮挡判据的"时域中位"就是拿它算的；
+            tex 是逐帧 **96x54 灰度剖面**（纹理守卫用）。两者都**搭在已经在解码的那一帧**上算，
+            不多解一次码（48x27 这一份就是 legacy 剖面，原本就已经在算）
       legacy 旧判据的两条变化率 {rb, rm, n, ...}（48×27 口径，逐字搬过来）
       pipD  逐帧对的**每格**平均绝对差（形状 帧对 × 格子数），pipG 是逐帧对的**全帧**平均绝对差；
             pip_grid 是 (rows, cols, ys, xs, fh, fw, counts)。判据 4 只用这三条序列 ——
             判据 1/2/3 一行都不读它们，所以**不改**既有判据的结果。
 
-    **成本**：角状外物的证据必须**逐帧、近全分辨率**地量（工具条是闪现的，缩略图又数不出色板
-    的色调档数——见 widget_regions 的说明），所以这一遍会比只看剖面贵一截；实测 p20（1547 帧）
-    从 12 s 涨到约 45 s，BV1CCtz6WEvF_p1（5624 帧）从 45 s 涨到约 2.5 min。这笔钱换的是
-    「chosen 帧的 OCR 文本里不再有工具条的字」；将来若要省，方向是先用更便宜的信号圈出候选帧
-    再做全分辨率复核（实测「低分辨率梯度」「低分辨率饱和度」都圈不准，这两条已试过并否掉）。
+    **成本**：临时遮挡的**指纹**（48x27 + 96x54 两个剖面）搭在本函数已有的逐帧解码上，增量≈0；
+    贵的那一步（480 宽的色块色调档数）**只对一筛候选帧跑**（每集通常 0~40 帧），所以整集的
+    overlay 与只看剖面同量级。旧判据 corner_static_glyphs（已删）是**逐帧近全分辨率**量四角，
+    实测 p20 从 12 s 涨到约 45 s、BV1CCtz6WEvF_p1 从 45 s 涨到约 2.5 min —— 那笔钱换不到
+    任何区域（它的门槛在这些集上不可达），所以整族退役。
     """
     prev_fine = None
     prev_legacy = None
@@ -241,9 +230,11 @@ def scan(frames_dir: Path, files: list, p: dict, app: dict | None = None) -> dic
     sum_g = chg = None
     n = 0
     size = None
-    zones = rel_zones(float(p["widget_zone"])) if p["widget_enabled"] else []
-    wbest = {name: None for name, _ in zones}
-    wheard = {name: 0 for name, _ in zones}
+    # 临时遮挡：逐帧剖面（48x27 的 legacy + 96x54 的纹理尺度）搭在本帧已解码的灰度图上，增量≈0。
+    # 它们给的是 framesig.transient_overlay_corners 的一筛输入；二筛（480 宽的色块档数）在对
+    # 候选帧的第二次小扫描里做（见 transient_overlay_regions）。
+    tr_on = bool(p["transient_enabled"])
+    small_list, tex_list = [], []
     # M4 手写笔迹：逐**采样**帧算一次彩色细笔画掩膜（判据在 framesig.stroke_mask）。
     # stride 是为了控成本：笔迹是"这一段有没有"的量，不需要每帧都量；而它的两个消费方
     # （stable 的签名、ocr 的送识别图）都是**按帧现算**的，不依赖这里扫了几帧。
@@ -279,14 +270,10 @@ def scan(frames_dir: Path, files: list, p: dict, app: dict | None = None) -> dic
                                   dtype=np.float32) / 255.0
                 legacy = np.asarray(gray.resize((LEGACY_W, LEGACY_H), Image.BILINEAR),
                                     dtype=np.float32) / 255.0
-                # 角上的证据只裁四小块再转 numpy：整帧 asarray（2.7M 个 float）是这条链最贵的一步，
-                # 而四块加起来只有 4 个 384x216；实测这一改把 BV1CCtz6WEvF_p1 的 overlay 从 311 s 降到约 150 s。
-                crops = {}
-                for corner, (zl, zt, zr, zb) in zones:
-                    x0, y0 = int(zl * w), int(zt * h)
-                    x1, y1 = max(int(zr * w), x0 + 1), max(int(zb * h), y0 + 1)
-                    crops[corner] = np.asarray(rgbim.crop((x0, y0, x1, y1)),
-                                               dtype=np.float32) / 255.0
+                # 临时遮挡的纹理尺度剖面：96x54 是**固定的**（不按长宽比缩高）—— 标定数字
+                # （见 framesig.TRANSIENT_DEFAULTS）都是在这个尺度上量的，换尺度就换标定。
+                tex = (np.asarray(gray.resize((TRANSIENT_TEX[0], TRANSIENT_TEX[1]), Image.BILINEAR),
+                                  dtype=np.float32) / 255.0) if tr_on else None
         except Exception as exc:
             print("[overlay] 跳过读不出来的帧 %s（%s）" % (name, exc))
             continue
@@ -303,17 +290,9 @@ def scan(frames_dir: Path, files: list, p: dict, app: dict | None = None) -> dic
             print("[overlay] 帧尺寸不一致（%s）→ 停止统计" % name)
             break
         sum_g += fine
-        for corner, (zl, zt, zr, zb) in zones:
-            sub = crops[corner]
-            if sub.size < 64:
-                continue
-            hue, edge = _hue_patches(sub, p), _edge_frac(sub)
-            if hue >= int(p["widget_color_min"]) and edge >= float(p["widget_edge_min"]):
-                wheard[corner] += 1
-            cur = wbest[corner]
-            if cur is None or (hue, edge) > (cur["hue"], cur["edge"]):
-                wbest[corner] = {"hue": hue, "edge": edge, "crop": sub,
-                                 "zone": (zl, zt, zr, zb)}
+        if tr_on:
+            small_list.append(legacy)
+            tex_list.append(tex)
         if hw is not None and (fi % max(1, int(p["handwriting_stride"]))) == 0:
             small = np.asarray(rgbim.resize(
                 (PROFILE_W * 2, max(2, int(round(PROFILE_W * 2 * h / float(w))))),
@@ -362,7 +341,7 @@ def scan(frames_dir: Path, files: list, p: dict, app: dict | None = None) -> dic
 
     empty_pip = {"pipD": None, "pipG": None, "pip_grid": None, "pip_dropped": pip_dropped}
     if sum_g is None or not rows:
-        out = {"R": None, "mean": None, "chg": None, "widget": {}, "heard": {},
+        out = {"R": None, "mean": None, "chg": None, "small": None, "tex": None,
                "pairs": 0, "size": size, "legacy": None,
                "stroke_sum": None, "stroke_frames": 0, "stroke_frac_max": 0.0,
                "stroke_hits": [], "app_skipped": app_skipped}
@@ -377,8 +356,8 @@ def scan(frames_dir: Path, files: list, p: dict, app: dict | None = None) -> dic
         "R": np.array(rows, dtype=np.float32),
         "mean": sum_g / n,
         "chg": chg / max(1, len(rows)),
-        "widget": wbest,
-        "heard": wheard,
+        "small": np.stack(small_list) if small_list else None,
+        "tex": np.stack(tex_list) if tex_list else None,
         "pairs": len(rows),
         "size": size,
         "legacy": {"rb": (l_hit_b / l_n) if l_n else 0.0,
@@ -655,141 +634,105 @@ def pip_window_regions(scan_out: dict, p: dict, fit: dict | None, regions: list)
              "evidence": ev, "applicability": OK}], None
 
 
-# ---------------------------------------------------------------- 判据 2：角状外物
-def _hue_patches(arr: np.ndarray, p: dict) -> int:
-    """显著色块色调数：饱和度/亮度都够的像素按 30° 分 12 档，每档像素达标才计一档。"""
-    mx = arr.max(axis=2)
-    mn = arr.min(axis=2)
-    sat = np.where(mx > 1e-6, (mx - mn) / np.maximum(mx, 1e-6), 0.0)
-    m = (sat > SAT_MIN) & (mx > VAL_MIN)
-    if not m.any():
-        return 0
-    d = np.maximum(mx - mn, 1e-6)
-    r, g, b = arr[..., 0], arr[..., 1], arr[..., 2]
-    hue = np.where(mx == r, ((g - b) / d) % 6.0,
-                   np.where(mx == g, (b - r) / d + 2.0, (r - g) / d + 4.0)) * 60.0
-    bins = np.clip((hue / (360.0 / HUE_BINS)).astype(np.int32), 0, HUE_BINS - 1)[m]
-    cnt = np.bincount(bins, minlength=HUE_BINS)
-    need = max(20, int(0.004 * m.size))
-    return int((cnt >= need).sum())
+# ---------------------------------------------------------------- 判据 2：临时遮挡
+def _rgb_corner_loader(paths, files: list, p: dict, cache: dict):
+    """返回 (frame_idx, corner) -> 该角在 ~480 宽尺度上的 RGB（float32 0..1）。
 
-
-def _edge_map(arr: np.ndarray) -> np.ndarray:
-    """有边掩膜（灰度梯度 > EDGE_EPS），形状与 arr 的 H/W 对齐（末尾列/行取邻值）。
-
-    输入可以是 RGB（按通道取均值当灰度）或已经是灰度/单通道（预筛阶段传的就是 2-D 灰度）。
+    **只对一筛候选帧调用**（每集通常 0~40 帧）：同一帧的四个角共用一次解码 + 一次 resize，
+    结果按帧号缓存。二筛为什么要回到 ~480 宽：工具条那排色板在 320 宽就被插值糊成一团，
+    同一个工具条只数得出 3 档（480 宽 7~10 档），而假例在任何尺度都只有 0~2 档。
     """
-    g = arr.mean(axis=2) if arr.ndim == 3 else arr
-    gx = np.zeros_like(g, dtype=bool)
-    gy = np.zeros_like(g, dtype=bool)
-    gx[:, :-1] = np.abs(np.diff(g, axis=1)) > EDGE_EPS
-    gx[:, -1] = gx[:, -2] if g.shape[1] > 1 else False
-    gy[:-1, :] = np.abs(np.diff(g, axis=0)) > EDGE_EPS
-    gy[-1, :] = gy[-2, :] if g.shape[0] > 1 else False
-    return gx | gy
+    def load(i: int, corner: str) -> np.ndarray:
+        arr = cache.get(i)
+        if arr is None:
+            w = max(64, int(p["transient_color_width"]))
+            with Image.open(paths.frames / files[i]) as im0:
+                im = im0.convert("RGB")
+                h = max(2, int(round(w * im.size[1] / float(im.size[0]))))
+                im = im.resize((w, h), Image.BILINEAR)
+            arr = np.asarray(im, dtype=np.float32) / 255.0
+            cache[i] = arr
+        # RGB 是 (H, W, 3)：角窗几何走 corner_rect（不能拿末两维当 H/W）
+        y0, y1, x0, x1 = corner_rect(arr.shape[0], arr.shape[1], corner,
+                                     float(p["transient_zone"]))
+        return arr[y0:y1, x0:x1]
+    return load
 
 
-def _sat_map(arr: np.ndarray) -> np.ndarray:
-    mx = arr.max(axis=2)
-    mn = arr.min(axis=2)
-    sat = np.where(mx > 1e-6, (mx - mn) / np.maximum(mx, 1e-6), 0.0)
-    return (sat > SAT_MIN) & (mx > VAL_MIN)
+def transient_overlay_regions(paths, files: list, scan_out: dict, p: dict) -> tuple:
+    """临时遮挡：一筛指纹 + 二筛色块复核 + 瞬态门槛 → kind="transient_overlay" 的区域 + 日志。
 
+    判据本体（含全部实测数字）在 segmenters/framesig.transient_overlay_corners；本函数只做三件事：
+      1) 把 scan 存下来的逐帧剖面交给叶子判据；
+      2) 给叶子判据提供一个"按帧取角窗 RGB"的加载器（**只有候选帧会被真的解码**）；
+      3) 把 verdict == "transient" 的角落成区域、把 verdict == "resident" 的角**打印出来**。
 
-def _edge_frac(arr: np.ndarray) -> float:
-    return float(_edge_map(arr).mean())
-
-
-def widget_regions(paths, files: list, scan_out: dict, p: dict) -> list:
-    """角状外物：位置固定 + 帧间几乎不变 + 有细小字符或色块（三条同时成立才采信）。
-
-    三条怎么量（每条都落进 evidence）：
-      ① 位置固定：四个角各一个 widget_zone 边长的搜索窗；
-      ② 帧间几乎不变：窗内逐像素「变过的帧对比例」均值 < widget_changed_max；
-      ③ 有细小字符或色块：scan 在**每一帧、近全分辨率**上算的显著色块色调档数 color_patches
-         （饱和度与亮度都够的像素按 30 度分 12 档，每档像素数达窗内 0.4% 才计一档）与梯度密度
-         edge_frac，**两条都要满足**。
-
-    为什么要逐帧：标注工具条是**闪现**的——p20 整集 1547 帧里只有 3 帧的角上同时有色块与文字
-    （t 约 255~258 s，正好覆盖第 5 页的 chosen 帧），p21 只有 8 帧。等间隔抽样必然漏掉它，
-    而漏掉的后果正是「工具条文字进了 chosen 帧的 OCR 文本」。
-    为什么不能用缩略图：缩到 480 宽时一排色板被双线性插值糊成一团，实测同一个工具条再也数不出
-    5 档色调（全分辨率下是 6~7 档），这也是「先低分辨率预筛再复核」这条捷径在本样本上失败的原因。
-    为什么两条都要：幻灯片表格的梯度比工具条更高（实测 p22 表格 0.16 vs 工具条 0.09），
-    只用梯度会把表格挖掉；工具条的显著色调档数 6~7，幻灯片内容（表格 / 代码 / 手写）只有 1~3。
-
-    **代价（写进证据，不藏）**：区域是全局的（冻结契约不放时间戳），所以工具条只出现几帧时，
-    其余帧里同一角落的幻灯片内容也会被一起挖掉；evidence 里的 present_frames / frame_count
-    让复核者一眼看出这条区域是常驻还是闪现，从而判断该不该采信。
+    **区域语义（与另几类不同，消费方必须照做）**：这是**按帧**生效的区域 —— 只有 evidence.frames
+    里列出的那几帧在那个角上有遮挡物；其余帧同一角是**正常画面**，整块挖掉就是伤正文。
+    所以 masks() 会跳过它，消费方（composite）只对"终态帧正好在 frames 里"的页做镶嵌。
     """
-    chg = scan_out.get("chg")
-    if chg is None or not files:
-        return []
-    fh, fw = chg.shape
-    unchanging = 1.0 - chg
-    gate = 1.0 - float(p["widget_changed_max"])
-    bestmap = scan_out.get("widget") or {}
-    heard = scan_out.get("heard") or {}
-    regions = []
-    for corner, (zl, zt, zr, zb) in rel_zones(float(p["widget_zone"])):
-        best = bestmap.get(corner)
-        if not best:
+    if not p["transient_enabled"]:
+        return [], "临时遮挡判据按配置关闭（[overlay].transient_enabled=false）"
+    small, tex = scan_out.get("small"), scan_out.get("tex")
+    if small is None or tex is None or not files:
+        msg = "临时遮挡判据不成立（没有逐帧剖面）"
+        print("[overlay] " + msg)
+        return [], msg
+    # 剖面是 (n, H, W)：TRANSIENT_SMALL/TEX 按惯例写成 (宽, 高)，比的时候要反过来
+    want_small = (TRANSIENT_SMALL[1], TRANSIENT_SMALL[0])
+    want_tex = (TRANSIENT_TEX[1], TRANSIENT_TEX[0])
+    if tuple(small.shape[1:]) != want_small or tuple(tex.shape[1:]) != want_tex:
+        msg = ("临时遮挡判据不成立（剖面尺度 %s / %s 与标定尺度 %s / %s 不一致）"
+               % (tuple(small.shape[1:]), tuple(tex.shape[1:]), want_small, want_tex))
+        print("[overlay] " + msg)
+        return [], msg
+    cache = {}
+    loader = _rgb_corner_loader(paths, files, p, cache)
+    t0 = time.monotonic()
+    recs = transient_overlay_corners(small, tex, p, loader)
+    print("[overlay] 临时遮挡判据耗时 %.1fs（一筛指纹搭在已解码的帧上、增量≈0；"
+          "二筛只解码了 %d 帧做 480 宽色块复核）" % (time.monotonic() - t0, len(cache)))
+    regions, notes = [], []
+    for r in recs:
+        if r["verdict"] == "resident":
+            line = "[overlay] 角 %s：%s" % (r["corner"], r["reason"])
+            print(line)
+            notes.append(line[len("[overlay] "):])
             continue
-        if best["hue"] < int(p["widget_color_min"]) or best["edge"] < float(p["widget_edge_min"]):
+        if r["verdict"] != "transient":
             continue
-        crop = best["crop"]
-        zh_px, zw_px = int(crop.shape[0]), int(crop.shape[1])
-        mask = _edge_map(crop) | _sat_map(crop)
-        if not mask.any():
-            continue
-        ys, xs = np.where(mask)
-        bx0, bx1 = int(xs.min()), int(xs.max()) + 1
-        by0, by1 = int(ys.min()), int(ys.max()) + 1
-        pad_x = int(round(zw_px * float(p["widget_pad"])))
-        pad_y = int(round(zh_px * float(p["widget_pad"])))
-        bx0, by0 = max(0, bx0 - pad_x), max(0, by0 - pad_y)
-        bx1, by1 = min(zw_px, bx1 + pad_x), min(zh_px, by1 + pad_y)
-        w_rel, h_rel = zr - zl, zb - zt
-        box = [round(zl + (bx0 / float(zw_px)) * w_rel, 4),
-               round(zt + (by0 / float(zh_px)) * h_rel, 4),
-               round(zl + (bx1 / float(zw_px)) * w_rel, 4),
-               round(zt + (by1 / float(zh_px)) * h_rel, 4)]
-        area = (box[2] - box[0]) * (box[3] - box[1])
-        if area < float(p["widget_min_area"]) or area > float(p["widget_max_area"]):
-            continue
-        ly0, ly1 = int(round(zt * fh)), max(int(round(zb * fh)), int(round(zt * fh)) + 1)
-        lx0, lx1 = int(round(zl * fw)), max(int(round(zr * fw)), int(round(zl * fw)) + 1)
-        static = float(unchanging[ly0:ly1, lx0:lx1].mean())
-        if static < gate:
-            continue
-        ty0, ty1 = int(round(box[1] * fh)), max(int(round(box[3] * fh)), int(round(box[1] * fh)) + 1)
-        tx0, tx1 = int(round(box[0] * fw)), max(int(round(box[2] * fw)), int(round(box[0] * fw)) + 1)
-        static_t = float(unchanging[ty0:ty1, tx0:tx1].mean())
-        edge_t, hue_t = best["edge"], best["hue"]
-        w_r, h_r = box[2] - box[0], box[3] - box[1]
-        if h_r <= 0.035 and w_r >= 0.35 and (box[1] <= 0.08 or box[3] >= 0.92):
-            kind = "progress_bar"
-        elif box[3] <= 0.35 and hue_t < int(p["widget_color_min"]):
-            kind = "watermark"
-        else:
-            kind = "overlay_widget"
-        present = int(heard.get(corner, 0))
-        conf = float(min(0.9, max(0.3, 0.25 + 0.5 * (hue_t / 8.0) + 1.0 * edge_t)))
-        regions.append({"kind": kind, "box": box, "confidence": round(conf, 2),
-                        "evidence": {"criterion": "corner_static_glyphs",
-                                     "corner": corner,
-                                     "static_frac": round(static_t, 4),
-                                     "changed_max": float(p["widget_changed_max"]),
-                                     "edge_frac": round(edge_t, 4),
-                                     "color_patches": int(hue_t),
-                                     "area_ratio": round(area, 4),
-                                     "present_frames": present,
-                                     "frame_count": len(files),
-                                     "note": "位置固定 + 帧间几乎不变 + 有细小字符或色块"
-                                             "（色块按显著色调分档计数；区域是全局的，闪现的"
-                                             "工具条会连带遮住其余帧同一角的内容）"},
-                        "applicability": OK})
-    return regions
+        frames = [files[i] for i in r["hits"]]
+        ev = {"criterion": "transient_overlay",
+              "corner": r["corner"],
+              "frames_hit": len(frames), "frame_count": len(files),
+              "hit_ratio": r["hit_ratio"], "max_ratio": float(p["transient_max_ratio"]),
+              "min_frames": int(p["transient_min_frames"]),
+              "resid_hits": r["resid_hits"], "edge_hits": r["edge_hits"],
+              "color_hits": r["color_hits"],
+              "resid_min": float(p["transient_resid_min"]),
+              "frame_resid_max": float(p["transient_frame_resid_max"]),
+              "frame_share_min": float(p["transient_frame_share_min"]),
+              "edge_min": float(p["transient_edge_min"]),
+              "color_min": int(p["transient_color_min"]),
+              "color_width": int(p["transient_color_width"]),
+              "zone": float(p["transient_zone"]),
+              "window": int(p["transient_window"]),
+              "candidate_frames": len(r["candidates"]),
+              "resident_ratio": r["resident_ratio"], "resident_votes_max": r["votes_max"],
+              # 命中的**具体帧**：按帧镶嵌只认这个清单（不是时间戳，跑两次逐字节一致）
+              "frames": frames,
+              "note": ("角窗对时域中位的残差 >= resid_min 且整帧残差守卫通过、角窗纹理 >= edge_min、"
+                       "480 宽尺度色块色调档数 >= color_min；命中帧占比 <= max_ratio（否则按常驻处理）。"
+                       "**按帧生效**：只有 frames 里那几帧的该角有遮挡物，其余帧是正常画面，"
+                       "所以整块挖会伤正文；消费方（composite）按帧用。")}
+        conf = float(min(0.95, 0.5 + 0.4 * (len(frames) / max(1, len(r["candidates"])))
+                         + 0.1 * min(1.0, max(r["color_hits"] or [0]) / 12.0)))
+        regions.append({"kind": "transient_overlay", "box": r["box"],
+                        "confidence": round(conf, 2), "evidence": ev, "applicability": OK})
+        print("[overlay] 临时遮挡：角 %s 命中 %d/%d 帧（%.2f%%）→ 框 %s，交付期按帧从同页干净帧补回"
+              % (r["corner"], len(frames), len(files), 100 * r["hit_ratio"],
+                 ",".join("%.3f" % x for x in r["box"])))
+    return regions, "；".join(notes)
 
 
 # ---------------------------------------------------------------- 判据 3：手写笔迹
@@ -876,9 +819,7 @@ def _params_doc(p: dict) -> dict:
         "caption_strip_ratio", "caption_band_multiple", "diff_threshold",
         "caption_band_top_limit", "caption_rate_min", "caption_min_rows",
         "caption_row_multiple", "caption_row_gap",
-        "widget_enabled", "widget_zone", "widget_changed_max", "widget_samples",
-        "widget_min_area", "widget_max_area", "widget_edge_min", "widget_color_min",
-        "widget_pad",
+        *TRANSIENT_DEFAULTS.keys(),
         "pip_enabled", "pip_grid_cols", "pip_cell_eps", "pip_active_min", "pip_amp_min",
         "pip_amp_max", "pip_sync_max", "pip_max_area", "pip_min_cells", "pip_pairs_max",
         "handwriting_enabled", "handwriting_stride", "handwriting_min_frac",
@@ -909,6 +850,11 @@ def analyze(cfg: dict, paths, frames=None, basis=None) -> dict:
     else:
         out = scan(root, files, p, app_params((cfg.get("roles") or {})))
         size = out["size"]
+        # 临时遮挡先跑：它只依赖逐帧剖面（不依赖帧对），所以帧对数不足时也照跑
+        tr_regs, tr_note = transient_overlay_regions(paths, files, out, p)
+        regions.extend(tr_regs)
+        if tr_note:
+            applies.append(tr_note)
         if out["R"] is None or out["pairs"] < 8:
             applies.append("可用帧对只有 %d，变化率判据不成立" % out["pairs"])
         else:
@@ -924,24 +870,21 @@ def analyze(cfg: dict, paths, frames=None, basis=None) -> dict:
                 regions.extend(pip_regs)
                 if pip_reason:
                     applies.append(pip_reason)
-            if p["widget_enabled"]:
-                regions.extend(widget_regions(paths, files, out, p))
             if p["handwriting_enabled"]:
                 hw_regs, hw_reason = handwriting_regions(files, out, p)
                 regions.extend(hw_regs)
                 if hw_reason:
                     applies.append(hw_reason)
-            if not regions:
-                applies.append("角状外物判据也不成立（没有同时满足「位置固定 + 帧间几乎不变 "
-                               "+ 有细小字符或色块」的边角区域）"
-                               if p["widget_enabled"] else
-                               "角状外物判据按配置关闭（[overlay].widget_enabled=false，"
-                               "默认值，理由见 config/default.toml 的注释）")
 
-    # handwriting 区域**不进遮罩面积**：它的 box 只是审计范围（按帧应用，见 handwriting_regions），
-    # 把它算进 masked_area_ratio 会给出"遮掉了 90% 画面"这种误导性数字。
+    # handwriting 与 transient_overlay **都不进遮罩面积**：
+    #   * handwriting 的 box 只是审计范围（消费方按 params 里的判据逐帧重算笔画掩膜）；
+    #   * transient_overlay 的 box 只对 evidence.frames 里那几帧成立（整块挖会伤其余帧的正文）。
+    # 把它们算进 masked_area_ratio 会给出"遮掉了 90% 画面"这种误导性数字。
     hw = [r for r in regions if r.get("kind") == "handwriting" and r.get("applicability") == OK]
-    boxed = [r for r in regions if r.get("kind") != "handwriting"]
+    tr = [r for r in regions if r.get("kind") == "transient_overlay"
+          and r.get("applicability") == OK]
+    per_frame_kinds = ("handwriting", "transient_overlay")
+    boxed = [r for r in regions if r.get("kind") not in per_frame_kinds]
     masked = bool(boxed)
     note = ("已按遮罩算：stable 挖掉这些区域后再算帧差/墨迹/清晰度/送 OCR，"
             "measure 用 drawbox 在同一遍解码里挖掉同样的像素" if masked
@@ -950,6 +893,12 @@ def analyze(cfg: dict, paths, frames=None, basis=None) -> dict:
     if hw:
         note += ("；另有 %d 条 handwriting 区域（手写笔迹）：**不整块挖、不计入遮罩面积**，"
                  "消费方按 params 的 handwriting_* 判据逐帧重算笔画掩膜" % len(hw))
+    if tr:
+        n_frame = sum(int(r["evidence"].get("frames_hit") or 0) for r in tr)
+        note += ("；另有 %d 条 transient_overlay 区域（临时出现的遮挡：标注工具条 / 菜单 / 提示条）："
+                 "**不整块挖、不计入遮罩面积**，命中帧共 %d 帧；消费方（composite）只对"
+                 "「终态帧正好在 evidence.frames 里」的交付页做**同页无遮挡镶嵌**"
+                 "（框内取同页干净帧、框外取终态帧）" % (len(tr), n_frame))
     if pip_regs:
         note += ("；另有 %d 条 pip_window 区域（画中画讲师小窗）：**整块挖**（与字幕条一致），"
                  "判据与数字见该区域的 evidence（位置固定 + 长时间常驻 + 内容持续小幅变化 + "
@@ -971,6 +920,7 @@ def analyze(cfg: dict, paths, frames=None, basis=None) -> dict:
         "stats": {"region_count": len(regions),
                   "boxed_region_count": len(boxed),
                   "handwriting_region_count": len(hw),
+                  "transient_overlay_region_count": len(tr),
                   "masked_area_ratio": round(min(1.0, area), 4)},
     }
 
@@ -985,12 +935,35 @@ def _rel(paths, path) -> str:
 def masks(doc: dict) -> list:
     """从 overlay 文档里取出**可采信**的区域框（消费方也可自行读文件，文件即接口）。
 
-    **不含 handwriting**：手写笔迹的 box 只是审计范围，整块挖会把其余帧同位置的正文一起挖掉；
-    消费方应当读 strokes() 拿到判据参数后**逐帧**重算笔画掩膜。
+    **不含 handwriting 与 transient_overlay**：这两类的 box 都只对"某些帧"成立，整块挖会把
+    其余帧同位置的正文一起挖掉 —— 手写笔迹读 strokes() 拿判据参数逐帧重算笔画掩膜；临时遮挡
+    读 transient() 拿命中帧清单，只对那几帧做镶嵌。
     """
     return [list(r["box"]) for r in (doc.get("regions") or [])
-            if r.get("applicability") == OK and r.get("kind") != "handwriting"
+            if r.get("applicability") == OK
+            and r.get("kind") not in ("handwriting", "transient_overlay")
             and isinstance(r.get("box"), list) and len(r["box"]) == 4]
+
+
+def transient(doc: dict) -> list:
+    """overlay 文档里的**临时遮挡**区域（按帧生效）：返回 [{box, frames, evidence}, ...]。
+
+    消费方（layers/composite.py）只用它判断"这一页的终态帧是不是被临时遮挡了"：
+    是 -> 拿同页干净帧把框内补回来；不是 -> 原样交付。**不整块挖**（见 masks 的说明）。
+    没有区域时返回空列表（调用方退化为原样交付）。
+    """
+    out = []
+    for r in (doc.get("regions") or []):
+        if r.get("kind") != "transient_overlay" or r.get("applicability") != OK:
+            continue
+        box = r.get("box")
+        if not (isinstance(box, list) and len(box) == 4):
+            continue
+        ev = r.get("evidence") or {}
+        out.append({"box": [float(x) for x in box],
+                    "frames": [str(x) for x in (ev.get("frames") or [])],
+                    "evidence": ev})
+    return out
 
 
 def strokes(doc: dict) -> dict | None:
