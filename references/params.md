@@ -9,6 +9,11 @@
 | bundle | chapter_gap_sec | `25.0` |
 | bundle | propose_chapters | `True` |
 | bundle | transcript_max_chars | `0` |
+| composite | enabled | `True` |
+| composite | guard_in_min | `0.02` |
+| composite | guard_out_eps | `0.01` |
+| composite | jpg_quality | `100` |
+| composite | max_tries | `8` |
 | export | desc_max_chars | `14` |
 | export | title_field | `'title'` |
 | export | title_max_chars | `30` |
@@ -106,15 +111,25 @@
 | overlay | pip_min_cells | `2` |
 | overlay | pip_pairs_max | `40000` |
 | overlay | pip_sync_max | `0.6` |
-| overlay | widget_changed_max | `0.05` |
-| overlay | widget_color_min | `6` |
-| overlay | widget_edge_min | `0.03` |
-| overlay | widget_enabled | `False` |
-| overlay | widget_max_area | `0.09` |
-| overlay | widget_min_area | `0.004` |
-| overlay | widget_pad | `0.008` |
-| overlay | widget_samples | `40` |
-| overlay | widget_zone | `0.3` |
+| overlay | transient_color_frac | `0.0015` |
+| overlay | transient_color_min | `6` |
+| overlay | transient_color_width | `480` |
+| overlay | transient_edge_min | `0.03` |
+| overlay | transient_enabled | `True` |
+| overlay | transient_frame_resid_max | `0.02` |
+| overlay | transient_frame_share_min | `2.0` |
+| overlay | transient_max_ratio | `0.2` |
+| overlay | transient_min_frames | `1` |
+| overlay | transient_min_gap | `40` |
+| overlay | transient_page_min | `0.02` |
+| overlay | transient_ref_min | `128` |
+| overlay | transient_ref_stride | `8` |
+| overlay | transient_res_edge_min | `0.05` |
+| overlay | transient_resid_min | `0.02` |
+| overlay | transient_same_eps | `0.02` |
+| overlay | transient_votes_min | `3` |
+| overlay | transient_window | `10` |
+| overlay | transient_zone | `0.3` |
 | paths | cache_dir | `''` |
 | paths | contracts_dir | `''` |
 | paths | keep_cache | `True` |
@@ -202,6 +217,7 @@
 | segment | snap_window_sec | `3.0` |
 | segment | stable_min_sec | `1.5` |
 | segment | strategy | `'stable'` |
+| segment | transient_overlay_penalty | `0.0` |
 | sheet | blank_std_max | `0.02` |
 | sheet | cols | `3` |
 | sheet | enabled | `False` |
@@ -331,9 +347,11 @@ region         = [0.0, 0.0, 1.0, 1.0]   # 参与"稳定性判定"的画面区域
 [overlay]
 # M3 遮挡区识别（bnote overlay）：从**已抽出的帧**里认出"不是幻灯片内容"的那几块像素 →
 # cache/<vid>/overlay.json（区域 + 判据 + 置信 + 适用性；**不落逐帧掩码**、不含时间戳）。
-# 两类判据：① band_change_rate（底部烧录字幕条，含按行剖面拟合带）
-#           ② corner_static_glyphs（角状外物：标注工具条 / 水印 / 进度条 / 鼠标）
-# 消费方：切片（挖掉遮罩后算帧差/墨迹/清晰度/送 OCR 的图）与量测（motion/freeze 用哪些像素）。
+# 三类判据：① band_change_rate（底部烧录字幕条，含按行剖面拟合带）
+#           ② transient_overlay（**临时出现**的遮挡：标注工具条 / 菜单 / 进度条 / 鼠标，按帧生效）
+#           ③ handwriting（手写笔迹，按帧生效）与 pip_window（画中画讲师小窗，整块挖）
+# 消费方：切片（挖掉遮罩后算帧差/墨迹/清晰度/送 OCR 的图）、量测（motion/freeze 用哪些像素）、
+#         交付层（bundle → composite：按帧做同页无遮挡镶嵌）。
 # 注意：字幕带判据的三条旧参数**沿用 [segment] 的同名键**（caption_strip_ratio /
 #       caption_band_multiple / diff_threshold）——同一份语义只能有一个真源，不在这里抄。
 enabled               = true   # false = 不产出 overlay.json，消费方退化为全画面（旧行为）
@@ -343,21 +361,38 @@ caption_rate_min      = 0.15   # 带变化率下限（沿用旧实现的字面�
 caption_min_rows      = 2      # 拟合出的带至少这么多行（低分辨率行）
 caption_row_multiple  = 2.5    # 带内变化率相对"内容区"的倍数门槛（配合 +0.08 的绝对增量）
 caption_row_gap       = 0      # 允许带内出现几个低变化行（多行字幕留缝；0 = 不允许）
-# 角状外物判据（corner_static_glyphs）**默认关闭**：它在 6 集实测样本上要么漏（p20 的工具条
-# 只闪现 3 帧、p21 只有 8 帧）、要么误（阈值放宽到 5 档色调时 p20 会把左上角 0.30x0.30
-# 的幻灯片标题区当成工具条挖掉），而且逐帧近全分辨率量色块很贵（实测每集 +60~290 s）。
-# 想试就把它打开，并看清 overlay.json 里每条区域的 color_patches / present_frames /
-# frame_count —— 那三个数就是"这条区域该不该采信"的依据。
-widget_enabled        = false  # 是否启用角状外物判据
-widget_zone           = 0.30   # 角状外物的搜索窗边长（占画面宽/高的比例，四角各一个）
-widget_changed_max    = 0.05   # 逐像素"变过的帧对比例"上限（帧间几乎不变）
-widget_samples        = 40     # 每个角留几个候选帧做全分辨率证据（先按低分辨率梯度预筛，                               # 工具条是闪现的：等间隔抽样必然漏，见 overlay.py 模块头）
-widget_pad            = 0.008  # 收紧方框后向外放宽的比例（占搜索窗边长）
-widget_min_area       = 0.004  # 候选区域面积下限（占整幅）
-widget_max_area       = 0.09   # 面积上限（太大就不是角状外物了）
-widget_edge_min       = 0.03   # 全分辨率梯度密度下限（有细小字符）
-widget_color_min      = 6      # 显著色块色调档数下限（有彩色色块；**两条都要满足**：
-                               # 幻灯片表格的梯度比工具条更高，只看梯度会把表格挖掉）
+# —— 临时遮挡（§3.4-11 重立项）——
+# 判据与默认值的**唯一真源**在 bnote/segmenters/framesig.py 的 TRANSIENT_DEFAULTS（连同全部
+# 实测数字），这里只是可覆盖的副本。为什么整族换掉旧判据：corner_static_glyphs 要求
+# "帧间几乎不变 + 显著色块色调档数 >= 6"，而 p20/p21/p22/P48 全帧四角的色调档数**上限是 3**
+# （实测 1547/3244/2802/1385 帧）→ 门槛不可达、永远产不出区域，所以它连同 8 个 widget_* 键
+# 一起删掉。新判据按**瞬态性**判（不按种类：水印/常驻画中画只有在"闪现"时才处理）：
+#   一筛 = 角窗对时域中位的残差 + 整帧残差守卫（换页/转场帧）+ 96x54 梯度密度（纹理守卫）；
+#   二筛 = 只对一筛候选帧回 480 宽量"显著色块色调档数"（真例 7~10 档、假例 0~2 档；320 宽
+#          就把一排色板糊成一团，只剩 3 档）；
+#   瞬态门槛 = 命中帧占整集比例 <= transient_max_ratio 才处理；超过就打印"按常驻处理，不动"。
+# 实测（9 集 17946 帧）：p20=3 / p21=8 / p22=11 个命中帧与逐帧目视过的真值逐个相同；
+#   P48–P53 干净集 0 误报（p51 的 7 帧经目视确认是 Windows 桌面右键菜单，真例、非 chosen）。
+# 整集耗时增量 +2.6 s（p20 1547 帧：26.6 s → 29.2 s）—— 指纹搭在已经解码的帧上，增量≈0。
+transient_enabled         = true  # 是否启用临时遮挡判据
+transient_zone            = 0.30  # 四角搜索窗边长（占画面宽/高；先按实测角窗，属可配参数）
+transient_window          = 10    # 时域中位窗半径（帧）：21 帧 = 10.5 s @2fps
+transient_resid_min       = 0.02  # 角窗残差下限（真例 0.031~0.164；随机帧 p99 <= 0.013）
+transient_frame_resid_max = 0.02  # 整帧残差上限（换页 / 整屏变化的帧挡在这里）
+transient_frame_share_min = 2.0   # 或：角窗残差 >= 这个倍数 × 整帧残差（局部性守卫）
+transient_edge_min        = 0.03  # 角窗梯度密度下限（纹理守卫，96x54 尺度）
+transient_color_min       = 6     # 显著色块色调档数下限（二筛，480 宽尺度）
+transient_color_width     = 480   # 二筛的分析宽度（再小就数不出色板档数）
+transient_color_frac      = 0.0015 # 每档色调要占角窗这么多面积才算一档
+transient_max_ratio       = 0.2   # **瞬态门槛**：出现帧占比 <= 它才处理；超过 = 常驻 -> 不动
+transient_min_frames      = 1     # 至少这么多帧命中才产出一条区域
+transient_ref_stride      = 8     # 常驻检测（跨页不变量）的参考帧步长
+transient_ref_min         = 128   # 参考帧数下限（帧多时自动放大步长，保住这个数）
+transient_same_eps        = 0.02  # 角窗"与另一帧逐像素一致"的判定（48x27 平均绝对差）
+transient_page_min        = 0.02  # 整帧"是另一页"的距离下限
+transient_votes_min       = 3     # 至少这么多"另一页"的参考帧在同一角窗与它一致
+transient_min_gap         = 40    # 参考帧至少要隔这么多帧（同页邻帧不算数）
+transient_res_edge_min    = 0.05  # 常驻候选的纹理下限（只判常驻、报数，不产区域）
 
 # —— M6 新增：画中画讲师小窗（kind=pip_window，overlay 的第三类固定区域）——
 # 三条判据**全部同时成立**才算：① 位置固定 + 长时间常驻；② 内容持续小幅变化（不是每帧全换）；
@@ -416,6 +451,26 @@ handwriting_block_pad    = 3    # 色块核之外再多保护几圈：pad=1 时"
 handwriting_ink_max      = 0.62 # 深色印刷字阈值（沿用 segment 墨迹口径）：最后那一圈膨胀不许长进
                                 #   这些像素，免得把笔划过的数字啃掉（0.67 → 0.07 就是这个坑）
 handwriting_bg_window    = 15  # 判"邻近背景亮不亮"的滑窗边长
+
+[composite]
+# §3.4-11 交付期「同页无遮挡镶嵌」（bnote/layers/composite.py）：交付页的终态帧如果被**临时
+# 遮挡**命中（overlay.json 的 kind=transient_overlay），就把那个角窗换成**同一页的干净帧**、
+# 框外仍是终态帧。**只改 out/ 的交付图，不动 cache/frames 里的任何原始帧。**
+# 两个守卫（4 张问题页实测，见 layers/composite.py 模块头）：
+#   框外平均绝对差 <= guard_out_eps（"这俩是同一页"）：实测 0.00002 / 0.00028 / 0.00215 /
+#       0.00322；同段其它候选（同一页的**别的状态**）落在 0.0066~0.0336 —— 按"框外差最小"
+#       选源帧 + 这条守卫，选出来的就是同一页同一状态的那张。
+#   框内 RMS >= guard_in_min（"框内确实有东西要被补回来"）：实测 0.145 ~ 0.212。
+# 守卫不过、或"同段候选全被临时遮挡命中"→ **不动图**（照旧交付终态帧），只在
+# out/<vid>/_meta/composite.json 里记账（全遮/放弃/试过哪些候选都写清，不静默）。
+# 交付图仍是 JPEG（引用契约是 ../slides/NNNN.jpg），一次 q100 + 4:4:4 重编码：实测相对原帧的
+#   框外 |差| 均值 0.037~0.047 灰阶、最大 4 灰阶、涉及 3.3%~4.0% 像素（编解码噪声，不是内容
+#   改动）；**无损**合成图另存 _meta/composite/NNNN.png，框外与终态帧逐像素一致、可直接 diff。
+enabled       = true
+guard_out_eps = 0.01   # 框外平均绝对差上限（"同一页"守卫）
+guard_in_min  = 0.02   # 框内 RMS 下限（"有东西要补"守卫）
+max_tries     = 8      # 最多试几张干净候选当源帧（按框外差从小到大）
+jpg_quality   = 100    # 交付 JPEG 质量（配合 4:4:4；重编码噪声实测见上）
 
 [roles]
 # M4b：整屏应用/录屏（app_screen）判据 —— 判据与默认值在 bnote/segmenters/framesig.py 的
@@ -574,6 +629,15 @@ page_cut_lookback_sec = 1.5     # 稳定段起点前多久内出现硬切才算�
 occ_score_tol       = 0.10      # 只在"信息量接近"的候选之间比遮挡（打分 >= 最高分×(1-它)）；
                                 #   不设这个门槛会把动画中途的不完整帧选成主图
 occ_min_gain        = 0.10      # 遮挡要明显更少才值得换（占比差 >= 它；0.10 ≈ 画面 10%）
+# §3.4-11：候选帧被**临时遮挡**命中（overlay.json 的 transient_overlay 帧清单）时扣多少分。
+# **默认 0 = 只标记不扣分**，理由（实测）：这四张交付页的净胜分**全部**来自叠加层自己的字数
+#   （p20 +6.01 分 / 16 字、p21 +5.84 / 6 字、p22 +21 / +18 字），一旦扣分就会把**终态帧**
+#   换成同页更早的候选（p22 段 9 要退回 51 s 前的 001318）—— 那正是 M4b occlusion_swap 判错
+#   （换成半渲染帧）的同一类退化。被遮住的那一角改由**交付期**的同页镶嵌补回
+#   （layers/composite.py，框内取干净帧、框外仍是终态帧），终态帧照旧是主图。
+# 想试"扣分换帧"的人：把它设成 >= 该集叠加层的字数（例如 20），再看候选表里的
+#   transient_overlay / score 与交付页是否真的变干净。
+transient_overlay_penalty = 0.0
 ocr_consensus       = true      # 对前两名候选各跑一次 OCR 并按行合并（降低单次识别误差）
 auto_caption_strip  = true      # 自动识别烧进画面的口播字幕条并排除出稳定性判定与 OCR
 caption_strip_ratio = 0.14      # 字幕条高度占画面比例（自下而上）
