@@ -18,6 +18,10 @@
 
 {{VIDEO_META}}
 
+## 画面旁证（只有派单开了 --with-vision 才有内容）
+
+{{VISION_BLOCK}}
+
 ## 你产出什么
 
 `{{OUT_DIR}}/text/NN.md` —— 每块一个文件，**纯正文 Markdown**：

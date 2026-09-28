@@ -119,9 +119,12 @@ merge 出 lecture.md ──▶ brief --stage note ──▶ 单个全局 agent �
 
 ```
 auth       登录态（扫码 / 手动 / 检查）
-run        取数一条龙：meta + media + subtitle + frames + segment + ocr + bundle
+run        取数一条龙：meta + media + subtitle + frames + segment + ocr + bundle；--mode 显式声明模式（不触发探测）
 fetch      只取数（meta + media + subtitle），不做抽帧/切片
 stream     信息流/口播类（无幻灯片）：取音频+字幕 → 分段分块 → 整理稿（--assemble 拼接+校验）
+           M5 起可选 --with-vision：额外产出**取样面板**当画面旁证给写手（需先跑 bnote sample；
+           面板只覆盖几个窗口、不代表全片；**能否在正文引用**由 [sheet].inline 定，默认不许引）；
+           --mode 显式声明模式（与 mode_hint 冲突只 warn、按显式值走）；两者都**不改**机械分段与锚点规则
 meta       只取元信息（BV/p/cid/标题/时长/**简介/标签/分区/UP 置顶评论**；旧缓存会自动补取）
 slides     只做抽帧 + 切片 + OCR（改了切片参数后重跑它，再跑 bundle）；M3 起顺序是抽帧 → overlay → 切片；
            M4 起切片前还会做**帧角色分类 + 整页优先**：段内只要存在可当主图的候选

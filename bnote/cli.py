@@ -80,6 +80,8 @@ def _overrides(args) -> dict:
         ov.setdefault("media", {})["audio_only"] = True
     if args.keep_video is not None:
         ov.setdefault("media", {})["keep_video"] = args.keep_video
+    if getattr(args, "with_vision", False):
+        ov.setdefault("text", {})["with_vision"] = True
     return ov
 
 
@@ -169,9 +171,46 @@ def _stage_slides(cfg, paths, args):
     return meta, transcript, seg
 
 
+def _apply_mode(args, cfg, paths):
+    """--mode 的显式声明（M5，§3.6-4 规则 8）。
+
+    语义 = **声明**：不触发任何探测、**不自动跑 triage**、不新增产物字段；与
+    out/<vid>/_meta/mode_hint.json 的 suggest 冲突时 warn 到 stderr，**按显式值走**（不阻断）。
+    """
+    mode = getattr(args, "mode", None)
+    if not mode:
+        return
+    hint = paths.read_json(paths.meta_dir() / "mode_hint.json", None) or {}
+    suggest = hint.get("suggest")
+    if suggest and suggest != mode:
+        print("[mode] 显式 --mode=%s 与 mode_hint 的建议 %s 冲突 → 按显式值走（判型只建议，不阻断）"
+              % (mode, suggest), file=sys.stderr)
+    else:
+        print("[mode] 显式声明 --mode=%s%s"
+              % (mode, "（与 mode_hint 一致）" if suggest else "（没有 mode_hint）"), file=sys.stderr)
+
+
+def _with_vision(cfg, paths):
+    """bnote stream --with-vision：产出取样面板，供派单材料引用（M5 §3.6-5）。
+
+    **显式 flag 即 opt-in**（等于在该次运行的"自动生成面板"作用域内打开 sheet.enabled）；
+    能不能在正文里**引用**另由 [sheet].inline 决定（默认 false = 可以看、不许引）。
+    取样包不存在 → resolve_basis 明确报错（不静默降级成"没有画面"）。
+    """
+    basis = resolve_basis(paths, "sample")
+    sh = cfg.get("sheet") or {}
+    per = max(1, int(sh.get("cols", 3)) * int(sh.get("rows", 4)))
+    want = max(per, int(sh.get("max_stream", 4)) * per)
+    sheet_layer.run(cfg, paths, basis=basis, want=want)
+    doc = paths.read_json(paths.meta_dir() / sheet_layer.SHEET_JSON_SAMPLE_NAME, None) or {}
+    print("[text] --with-vision：取样面板已就绪（%s）"
+          % "、".join(str(s.get("name")) for s in (doc.get("sheets") or [])))
+
+
 def cmd_run(args):
     cfg, paths, vid = _ctx(args)
     _banner(paths, cfg, vid)
+    _apply_mode(args, cfg, paths)
     t0 = time.time()
     meta, media_path, transcript = _stage_fetch(cfg, paths, args)
     meta, transcript, seg = _stage_slides(cfg, paths, args)
@@ -228,9 +267,11 @@ def cmd_stream(args):
     """信息流 / 口播类（无幻灯片）：只取音频 + 字幕 → 机械分段 → 分块任务书 → 拼接校验。
 
     不做抽帧、不切片、不 OCR、不分章；交付 transcript.md（原样）与 lecture.md（整理稿，逐段覆盖不摘要）。
+    --with-vision 时额外产取样面板，把"他在演示什么"作为旁证材料给写手（**不改机械分段与锚点规则**）。
     """
     cfg, paths, vid = _ctx(args)
     _banner(paths, cfg, vid)
+    _apply_mode(args, cfg, paths)
     if args.assemble or args.verify:
         if args.assemble:
             text_layer.assemble(cfg, paths)
@@ -255,6 +296,8 @@ def cmd_stream(args):
     else:
         media_path = media_layer.download(cfg, paths, meta, cookie, netscape, force=args.force)
         transcript = subtitle_layer.get(cfg, paths, meta, media_path, cookie, force=args.force)
+    if getattr(args, "with_vision", False):
+        _with_vision(cfg, paths)          # 面板必须先落盘，render_brief 才拿得到
     res = text_layer.build(cfg, paths, meta, transcript)
     print("[text] 分段 %d ｜ 分块 %d" % (res["paragraphs"], res["chunks"]))
     print("[text] 下一步：")
@@ -774,6 +817,9 @@ def build_parser():
                      ("meta", cmd_meta), ("bundle", cmd_bundle)):
         sp = sub.add_parser(name)
         common(sp)
+        if name == "run":
+            sp.add_argument("--mode", choices=["slides", "stream"], default=None,
+                            help="显式声明这次按哪种模式跑（不触发探测；与 mode_hint 冲突只 warn）")
         sp.set_defaults(func=fn)
 
     sp = sub.add_parser("overlay", help="M3 遮挡区识别：烧录字幕条 / 角状外物（工具条·水印·进度条）→ cache/<vid>/overlay.json")
@@ -821,6 +867,10 @@ def build_parser():
 
     sp = sub.add_parser("stream", help="信息流/口播类（无幻灯片）：只取音频+字幕，不抽帧、不切片、不分章")
     common(sp)
+    sp.add_argument("--with-vision", dest="with_vision", action="store_true",
+                    help="产出取样面板并作为画面旁证材料交给写手（需先跑 bnote sample；不改分段与锚点规则）")
+    sp.add_argument("--mode", choices=["slides", "stream"], default=None,
+                    help="显式声明模式（不触发探测；与 mode_hint 冲突只 warn）")
     sp.add_argument("--assemble", action="store_true", help="把各块产出拼成 lecture.md 并校验")
     sp.add_argument("--verify", action="store_true", help="只校验（不拼接）")
     sp.set_defaults(func=cmd_stream)

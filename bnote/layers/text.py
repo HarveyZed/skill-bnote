@@ -159,12 +159,51 @@ def build_chunks(cfg, paths, paragraphs: list, meta: dict) -> list:
     return chunks
 
 
+def _vision_block(cfg, paths) -> str:
+    """画面旁证材料块（M5，§3.6-5）：把取样面板交给写手，并写死两条规矩。
+
+    开关：@@[text].with_vision@@（显式 bnote stream --with-vision 也会开它）——**默认关**，
+    关了返回空串（模板里的 @@{{VISION_BLOCK}}@@ 被替换成空，材料与 0.12.0 等价）。
+    @@[sheet].inline@@ 决定写手**能不能在正文引用**这些面板（默认 false = 可以看、不许引）。
+    """
+    if not (cfg.get("text") or {}).get("with_vision"):
+        return ""
+    doc = paths.read_json(paths.meta_dir() / "sheet_sample.json", None) or {}
+    sheets = [str(s.get("name")) for s in (doc.get("sheets") or [])]
+    if not sheets:
+        return ("**画面旁证**：本条派单打开了 --with-vision，但取样面板不存在或为空 —— 请先跑\n"
+                "`bnote sample <URL> --page N`，再跑 `bnote sheet <URL> --page N --basis sample`。\n"
+                "本次按**没有画面**处理，别凭想象写画面。\n")
+    tiles = len(doc.get("tiles") or [])
+    cov = doc.get("coverage") or {}
+    inline = bool((cfg.get("sheet") or {}).get("inline"))
+    lines = ["**画面旁证（取样面板）**",
+             "",
+             "- 面板：%s（共 %d 格）→ 路径 `../_meta/sheets/<name>.png`" % ("、".join("`%s`" % s for s in sheets), tiles),
+             "- **只覆盖 %.1f%% 时长**（最大未采样间隔 %ss）：它**不代表全片**，没看到的地方不许推断" %
+             ((cov.get("sampled_ratio") or 0) * 100, cov.get("uncovered_max_gap_sec")),
+             "- **铁律**：面板是缩放拼图，**里面的字一律不采信**；要读字（代码、报错、页脚）必须用\n"
+             "  `bnote frames <URL> --page N --at HH:MM:SS --read` 取**全分辨率单帧**再看",
+             ""]
+    if inline:
+        lines += ["写手可以**自行决定**要不要在正文里引用面板：有信息就写一句「他在演示 X」并引用\n"
+                  "`../_meta/sheets/<name>.png`；没有信息就只在回报里提一句，**别硬凑图**。",
+                  "引用只能用这两类相对路径：`../slides/NNNN.jpg`（本模式没有）与 `../_meta/sheets/<name>.png`——\n"
+                  "**不许**写别的路径，也不许把面板里的字当原文抄。",
+                  ""]
+    else:
+        lines += ["本次 **`[sheet].inline=false`**：面板只作**你看画面的材料**，\n"
+                  "**不要**在正文里引用任何图片（正文仍是纯文字；引用会被结构校验拦下）。", ""]
+    return "\n".join(lines)
+
+
 def render_brief(cfg, paths, meta: dict, paragraphs: list, chunks: list) -> Path:
     from . import glossary as glossary_layer
     from . import profile as profile_layer
     from . import prompt as prompt_layer
     tpl = Path(cfg["paths"]["contracts_dir"]) / "text_writer.md"
     text = tpl.read_text(encoding="utf-8") if tpl.exists() else "# 派单：信息流整理稿\n"
+    vision = _vision_block(cfg, paths)
     prof = profile_layer.build(cfg, paths, meta, load_transcript(paths), None)
     glossary_layer.propose(cfg, paths, prof)
     use, avoid, confirmed = glossary_layer.effective(cfg, paths, prof)
@@ -184,7 +223,10 @@ def render_brief(cfg, paths, meta: dict, paragraphs: list, chunks: list) -> Path
         "CHECK_CMD": "BNOTE_ROOT=%s bnote stream %s --page %s --assemble   # 拼接并校验（带数据根，换根也能照抄）"
                      % (cfg["paths"]["root"], meta.get("url") or "<URL>", page),
         "VIDEO_META": prompt_layer.video_meta_block(cfg, meta),
-        "EVIDENCE_SOURCES": "`transcript.md`（本地 ASR 或平台字幕，一手；本集没有幻灯片，没有任何图可看）",
+        "VISION_BLOCK": vision,
+        "EVIDENCE_SOURCES": (("`transcript.md`（本地 ASR 或平台字幕，一手）" if not vision else
+                              "`transcript.md`（一手）+ **取样面板**（画面旁证）—— 面板里的字一律不采信，"
+                              "要读字必须用 bnote frames --read 取全分辨率单帧")),
         "TERM_POLICY": profile_layer.term_policy(prof, reviewed=use, confirmed=confirmed, mode="text"),
         "FORMAT_RULES": profile_layer.format_rules(prof, mode="text"),
     }
