@@ -8,6 +8,7 @@
   bnote measure <BV|URL>       L4.5 媒体验测（零 token：逐秒运动/切点/冻结/静音，M3 起按遮罩算）
   bnote sample  <BV|URL>       M5 取样包（片头/中段/片尾各一小段 → cache/<vid>/sample/，判型用）
   bnote sheet  <BV|URL>        M2 读字面板：若干帧拼成一张只烧序号的索引图 + 行列→t 映射
+  bnote figures <BV|URL>       0.14.0 单帧插图：取样包每窗挑关键时刻 → 全分辨率单帧 + figures.json
   bnote frames <BV|URL>        M2 按时间取帧：--at 给最近一帧+前后各一帧；--read 给全分辨率单帧
   bnote bundle <BV|URL>        L7 交付物
   bnote merge  <BV|URL>        L8 合并成单文件讲义
@@ -38,6 +39,7 @@ from .layers import loop as loop_layer
 from .layers import remap as remap_layer
 from .layers import xref as xref_layer
 from .layers import bundle as bundle_layer
+from .layers import figures as figures_layer
 from .layers import frames as frames_layer
 from .layers import measure as measure_layer
 from .layers import sample as sample_layer
@@ -191,10 +193,11 @@ def _apply_mode(args, cfg, paths):
 
 
 def _with_vision(cfg, paths):
-    """bnote stream --with-vision：产出取样面板，供派单材料引用（M5 §3.6-5）。
+    """bnote stream --with-vision：产出**画面旁证材料**（M5 §3.6-5）与**单帧插图候选**（0.14.0）。
 
-    **显式 flag 即 opt-in**（等于在该次运行的"自动生成面板"作用域内打开 sheet.enabled）；
-    能不能在正文里**引用**另由 [sheet].inline 决定（默认 false = 可以看、不许引）。
+    **显式 flag 即 opt-in**：等于在该次运行的作用域内同时打开 sheet.enabled 与 figures.enabled；
+    能不能在正文里**引用**插图另由 [figures].inline 决定（默认 false = 可以看、不许引）——
+    面板（sheet）只是给写手看的材料，从来不是可引用的图（A 段 §5-h）。
     取样包不存在 → resolve_basis 明确报错（不静默降级成"没有画面"）。
     """
     basis = resolve_basis(paths, "sample")
@@ -205,6 +208,7 @@ def _with_vision(cfg, paths):
     doc = paths.read_json(paths.meta_dir() / sheet_layer.SHEET_JSON_SAMPLE_NAME, None) or {}
     print("[text] --with-vision：取样面板已就绪（%s）"
           % "、".join(str(s.get("name")) for s in (doc.get("sheets") or [])))
+    figures_layer.run(cfg, paths)      # 显式 --with-vision = 这次的自动路径视为打开 [figures].enabled
 
 
 def cmd_run(args):
@@ -712,6 +716,21 @@ def cmd_frames(args):
     return 0
 
 
+def cmd_figures(args):
+    """单帧插图（0.14.0）：取样包每个窗口挑关键时刻 → 抽**全分辨率单帧** →
+    out/<vid>/_meta/figures/NN.png + figures.json（清单记 t / 来源帧 / size / sha256 / 一句理由）。
+
+    只在显式调用时跑 —— `[figures].enabled` 只约束"自动生成"（`stream --with-vision` 会打开它），
+    能不能在正文里**引用**另由 `[figures].inline` 决定（默认 false = 可以看、不许引）。
+    """
+    cfg, paths, vid = _ctx(args)
+    res = figures_layer.run(cfg, paths, max_n=args.max_figures)
+    if res["count"]:
+        print("[figures] 引用写法：![他在这里演示的是 Xxx（一句话）](../_meta/figures/01.png)"
+              "（写手能否引用见 [figures].inline）")
+    return 0
+
+
 def cmd_sheet(args):
     """M2 读字面板：把若干帧拼成一张**只烧序号**的索引图 → _meta/sheets/*.png + _meta/sheet.json。
 
@@ -865,10 +884,16 @@ def build_parser():
                     help="full（默认）= 整片帧 → _meta/sheet.json；sample = 取样帧 → _meta/sheet_sample.json")
     sp.set_defaults(func=cmd_sheet)
 
+    sp = sub.add_parser("figures", help="0.14.0 单帧插图：取样包每个窗口挑关键时刻 → 全分辨率单帧 → _meta/figures/ + figures.json")
+    common(sp)
+    sp.add_argument("--max", dest="max_figures", type=int, default=None,
+                    help="最多几张（默认取 [figures].max_per_video）")
+    sp.set_defaults(func=cmd_figures)
+
     sp = sub.add_parser("stream", help="信息流/口播类（无幻灯片）：只取音频+字幕，不抽帧、不切片、不分章")
     common(sp)
     sp.add_argument("--with-vision", dest="with_vision", action="store_true",
-                    help="产出取样面板并作为画面旁证材料交给写手（需先跑 bnote sample；不改分段与锚点规则）")
+                    help="产出取样面板（旁证材料）+ 单帧插图候选（需先跑 bnote sample；不改分段与锚点规则）")
     sp.add_argument("--mode", choices=["slides", "stream"], default=None,
                     help="显式声明模式（不触发探测；与 mode_hint 冲突只 warn）")
     sp.add_argument("--assemble", action="store_true", help="把各块产出拼成 lecture.md 并校验")

@@ -176,7 +176,8 @@ def build(cfg, paths, meta: dict, seg_data: dict, transcript: dict | None = None
         body.append(NL + "---" + NL)
     def _normalize(r):
         """讲义在 out/<vid>/ 下：正文的 ../slides/x 落成 slides/x。
-        面板引用**原样保留**（§3.3：merge 只重写 slides 一类，面板是材料、不进讲义的图）。"""
+        面板与插图引用**原样保留**（§3.3：merge 只重写 slides 一类——页号空间会重编号；
+        面板/插图是 _meta 下的固定名，不参与重编号，也不内嵌进自包含版）。"""
         return refs_layer.ref_relpath(r.kind, r.name) if r.kind == "slides" else None
 
     merged = refs_layer.sub_path(NL.join(head) + NL.join(body), _normalize)

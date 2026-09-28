@@ -1,18 +1,22 @@
-"""图引用白名单（M2 / §3.3）：**唯一**的正则与解析入口。
+"""图引用白名单（M2 / §3.3；0.14.0 加第三类插图）：**唯一**的正则与解析入口。
 
-正文里允许出现的图片引用只有两类：
+正文里允许出现的图片引用有三类：
 
   * `slides`（主图）—— `../slides/NNNN.jpg`，页号固定 4 位；`slides/` 的页号空间是冻结的，
-    读字面板**绝不**进这个目录（否则页号空间会被污染）；
+    读字面板与插图**绝不**进这个目录（否则页号空间会被污染）；
   * `sheet`（读字面板）—— `../_meta/sheets/<name>.png`，名字必须能在 `_meta/sheet.json`
-    的 tile 里查到（校验口径见 references/schema/body-contract.md）。
+    的 tile 里查到（校验口径见 references/schema/body-contract.md）。面板是**缩放拼图**，
+    在信息流模式里只是**给写手看的材料**，不是交付物里的图；
+  * `figure`（单帧插图，0.14.0）—— `../_meta/figures/<name>.png`，名字必须能在
+    `_meta/figures.json` 的 figures 里查到；由 `bnote figures`（或 `stream --with-vision`）
+    从取样包挑关键时刻、抽**全分辨率单帧**产出。
 
 为什么集中在一处：M2 之前四处各写一份正则，`manifest.py` 收 `\\d{4}`、`body.py` 收 `\\d{3,4}`，
 同一份正文在两处会得出不同结论（3 位页号：manifest 判「没引用图」、body 判「引用了不存在的图」）。
 白名单必须**一处定义、四处消费**：manifest（校验）/ body（小节解析）/ merge（相对路径重写）/
 remap（重编号）。`note.py` 与 `export_bili_note.py` 只解析时间行、不解析图片路径，**不进白名单**。
 
-两类之外的图片引用**一律不匹配**：不会被当成 slide 校验，也不会被 merge/remap 改写。这不是漏写
+三类之外的图片引用**一律不匹配**：不会被当成 slide 校验，也不会被 merge/remap 改写。这不是漏写
 正则，而是白名单的语义——不认识的引用不静默改写，交由 `manifest.validate` 显式报出来。
 """
 from __future__ import annotations
@@ -21,33 +25,36 @@ import re
 from pathlib import Path
 from typing import Callable, NamedTuple
 
-# 两类引用的目录（相对 out/<vid>/）
+# 三类引用的目录（相对 out/<vid>/）
 SLIDES_DIR = "slides"
 SHEET_DIR = "_meta/sheets"
-REF_KINDS = ("slides", "sheet")
+FIGURES_DIR = "_meta/figures"
+REF_KINDS = ("slides", "sheet", "figure")
 # 章节正文在 out/<vid>/chapters/ 下，故正文里的相对引用多一层
 BODY_PREFIX = "../"
 
 _PAGE_RE = re.compile(r"^\d{4}$")
 _SHEET_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\.png$")
 
-# 唯一的图引用正则：两类引用 + 可选的 "../" 前缀；alt 文本与前缀都原样保留，改写时不改形态。
+# 唯一的图引用正则：三类引用 + 可选的 "../" 前缀；alt 文本与前缀都原样保留，改写时不改形态。
 IMG_RE = re.compile(
     r"!\[(?P<alt>[^\]]*)\]\((?P<target>(?P<prefix>\.\./)?"
     r"(?:(?P<slides>slides)/(?P<page>\d{4})\.jpg"
-    r"|(?P<sheets>_meta/sheets)/(?P<sheet>[A-Za-z0-9][A-Za-z0-9._-]*\.png)))\)")
+    r"|(?P<sheets>_meta/sheets)/(?P<sheet>[A-Za-z0-9][A-Za-z0-9._-]*\.png)"
+    r"|(?P<figures>_meta/figures)/(?P<figure>[A-Za-z0-9][A-Za-z0-9._-]*\.png)))\)")
 # 任意 Markdown 图片：白名单之外的引用也要能被指出来（见 unknown_targets）
 ANY_IMG_RE = re.compile(r"!\[[^\]]*\]\((?P<target>[^)\s]+)")
 # 白名单内的目标形态（供 unknown_targets 判定，不用于解析）
 TARGET_RE = re.compile(
-    r"^(?:\.\./)?(?:(?:%s)/\d{4}\.jpg|(?:%s)/[A-Za-z0-9][A-Za-z0-9._-]*\.png)$"
-    % (SLIDES_DIR, re.escape(SHEET_DIR)))
+    r"^(?:\.\./)?(?:(?:%s)/\d{4}\.jpg|(?:%s)/[A-Za-z0-9][A-Za-z0-9._-]*\.png"
+    r"|(?:%s)/[A-Za-z0-9][A-Za-z0-9._-]*\.png)$"
+    % (SLIDES_DIR, re.escape(SHEET_DIR), re.escape(FIGURES_DIR)))
 
 
 class Ref(NamedTuple):
     """一条白名单内的图引用。"""
 
-    kind: str          # "slides" | "sheet"
+    kind: str          # "slides" | "sheet" | "figure"
     name: str          # "0012.jpg" | "sheet_01.png"（规范名，含扩展名）
     alt: str           # ![] 里的替代文本
     prefix: str        # "../" 或 ""（原样保留，供改写时不改变形态）
@@ -64,8 +71,10 @@ class Ref(NamedTuple):
 
 
 def _make(m: re.Match) -> Ref:
-    kind = "slides" if m.group("slides") else "sheet"
-    name = ("%s.jpg" % m.group("page")) if kind == "slides" else m.group("sheet")
+    kind = ("slides" if m.group("slides") else
+            "sheet" if m.group("sheets") else "figure")
+    name = (("%s.jpg" % m.group("page")) if kind == "slides" else
+            m.group("sheet") if kind == "sheet" else m.group("figure"))
     ts, te = m.span("target")
     return Ref(kind=kind, name=name, alt=m.group("alt"), prefix=m.group("prefix") or "",
                raw=m.group(0), start=m.start(), end=m.end(),
@@ -73,7 +82,7 @@ def _make(m: re.Match) -> Ref:
 
 
 def iter_refs(text: str, kind: str | None = None) -> list[Ref]:
-    """按出现顺序列出白名单内的图引用；kind 只取 "slides" / "sheet"（None = 两类都要）。"""
+    """按出现顺序列出白名单内的图引用；kind 只取 "slides"/"sheet"/"figure"（None = 三类都要）。"""
     if kind is not None and kind not in REF_KINDS:
         raise ValueError("未知引用类别：%r（白名单只有 %s）" % (kind, "/".join(REF_KINDS)))
     return [r for r in (_make(m) for m in IMG_RE.finditer(text or ""))
@@ -144,18 +153,25 @@ def norm_name(kind: str, name) -> str:
         if not _PAGE_RE.match(s):
             raise ValueError("slides 引用必须是 4 位页号（如 0012）：%r" % (name,))
         return s + ".jpg"
-    if kind == "sheet":
+    if kind in ("sheet", "figure"):
         s = s if s.endswith(".png") else s + ".png"
         if not _SHEET_NAME_RE.match(s):
-            raise ValueError("sheet 引用必须是 _meta/sheets/ 下的 png 文件名（如 sheet_01.png）：%r"
-                             % (name,))
+            raise ValueError("%s 引用必须是 %s/ 下的 png 文件名（如 %s）：%r"
+                             % (kind, SHEET_DIR if kind == "sheet" else FIGURES_DIR,
+                                "sheet_01.png" if kind == "sheet" else "01.png", name))
         return s
     raise ValueError("未知引用类别：%r（白名单只有 %s）" % (kind, "/".join(REF_KINDS)))
 
 
+_DIRS = {"slides": SLIDES_DIR, "sheet": SHEET_DIR, "figure": FIGURES_DIR}
+
+
 def ref_relpath(kind: str, name) -> str:
-    """相对 **out/<vid>/** 的引用路径（讲义与校验用）：`slides/0012.jpg` / `_meta/sheets/x.png`。"""
-    d = SLIDES_DIR if kind == "slides" else SHEET_DIR
+    """相对 **out/<vid>/** 的引用路径（讲义与校验用）：`slides/0012.jpg` / `_meta/sheets/x.png`
+    / `_meta/figures/01.png`。"""
+    d = _DIRS.get(kind)
+    if d is None:
+        raise ValueError("未知引用类别：%r（白名单只有 %s）" % (kind, "/".join(REF_KINDS)))
     return "%s/%s" % (d, norm_name(kind, name))
 
 

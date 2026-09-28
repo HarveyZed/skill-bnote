@@ -246,7 +246,7 @@ first_frame_tol_sec  = 1.0    # 每个窗口首帧 t 与窗口起点的容差（
 # enabled / inline 是给「自动生成 / 写手引用」的开关 —— M2 里没有任何自动路径：
 #       用户显式敲 bnote sheet 就是要它跑，**不受 enabled 拦**（默认 false 也不影响手动使用）。
 enabled            = false      # 是否允许自动/流水线生成面板（预留给 M5：信息流画面旁证、判型 T3）
-inline             = false      # 是否允许写手在正文里引用面板图（预留给 M5 的写作契约）
+inline             = false      # 【0.14.0 起在信息流模式不再生效】写手可引的图改成插图（见 [figures].inline）；面板只是材料
 preset             = "620x170"  # 单格包围盒：500x140 / 620x170 / 760x210（格宽按源帧长宽比反推）
 cols               = 3          # 每张面板的列数
 rows               = 4          # 每张面板的行数（cols*rows = 每张吃几个候选）
@@ -254,6 +254,19 @@ blank_std_max      = 0.02       # 一格的标准差低于该值判为空白格�
 max_sheets         = 8          # 整集上限（--max 会被夹到 max_sheets*cols*rows）
 max_per_chapter    = 2          # 每章上限（预留给 M5 的自动路径；M2 手动调用不受它拦）
 max_stream         = 4          # 信息流旁证上限（预留给 M5）
+
+[figures]
+# 0.14.0 单帧插图（bnote figures / bnote stream --with-vision）：从取样包每个窗口挑"关键时刻"，
+# 抽**全分辨率单帧**（复用 M2 的 frames.read_frame：缓存帧已是原生尺寸就复用，否则从整片媒体现抽
+# PNG 无损）→ out/<vid>/_meta/figures/NN.png + _meta/figures.json（t / 来源帧 / size / sha256 / 一句理由）。
+# 与 [sheet] 的分工：**面板是给写手看的材料**（缩放拼图，字一律不采信）；**插图才是可引用的图**（单帧）。
+# enabled / inline 的口径同 [sheet]：显式 bnote figures 不受 enabled 拦（显式命令就是要它跑）；
+# bnote stream --with-vision 视为打开 enabled（它本来就是"要画面旁证"的显式 opt-in）。
+enabled            = false      # 是否允许自动/流水线生成插图候选（显式 bnote figures 不受拦）
+inline             = false      # 是否允许写手在正文里引用插图 ../_meta/figures/NN.png
+max_per_video      = 4          # 整集上限：候选张数（超过按窗口顺序截断）与引用配额 warn 都用它
+min_change         = 0.02       # 窗口内"显著画面变化"的下限（相邻取样帧的归一化平均绝对差）；低于它取窗口中点帧
+diff_size          = [32, 18]   # 算帧差用的缩略尺寸（宽 x 高，灰度）——只为比大小，不读字
 
 [segment]
 strategy            = "stable"  # stable(默认，稳定态+终态收敛) | scene(基线对照)

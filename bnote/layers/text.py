@@ -164,40 +164,56 @@ def build_chunks(cfg, paths, paragraphs: list, meta: dict) -> list:
 
 
 def _vision_block(cfg, paths) -> str:
-    """画面旁证材料块（M5，§3.6-5）：把取样面板交给写手，并写死两条规矩。
+    """画面旁证材料块：**面板 = 给写手看的材料**、**插图 = 可引用的图**（0.14.0，A 段 §5-h）。
 
-    开关：`[text].with_vision`（显式 bnote stream --with-vision 也会开它）——**默认关**，
-    关了返回空串（模板里的 `{{VISION_BLOCK}}` 被替换成空，材料与 0.12.0 等价）。
-    `[sheet].inline` 决定写手**能不能在正文引用**这些面板（默认 false = 可以看、不许引）。
+    开关：`[text].with_vision`（显式 bnote stream --with-vision 也会开它）——**默认关**，关了返回
+    空串（模板里的 `{{VISION_BLOCK}}` 被替换成空，材料与 0.12.0 等价）。
+    `[figures].inline` 决定写手**能不能在正文引用**插图（默认 false = 可以看、不许引）；
+    面板（`../_meta/sheets/<name>.png`）**只作材料**、不再给引用写法——0.14.0 前它由 `[sheet].inline`
+    控制，那条语义已改（幻灯片模式不受影响，见 config 注释）。
     """
     if not (cfg.get("text") or {}).get("with_vision"):
         return ""
     doc = paths.read_json(paths.meta_dir() / "sheet_sample.json", None) or {}
     sheets = [str(s.get("name")) for s in (doc.get("sheets") or [])]
-    if not sheets:
-        return ("**画面旁证**：本条派单打开了 --with-vision，但取样面板不存在或为空 —— 请先跑\n"
-                "`bnote sample <URL> --page N`，再跑 `bnote sheet <URL> --page N --basis sample`。\n"
+    fig_doc = paths.read_json(paths.figures_json, None) or {}
+    figs = [f for f in (fig_doc.get("figures") or []) if isinstance(f, dict)]
+    if not sheets and not figs:
+        return ("**画面旁证**：本条派单打开了 --with-vision，但取样面板与插图候选都不存在或为空 —— 请先跑\n"
+                "`bnote sample <URL> --page N`，再跑 `bnote sheet <URL> --page N --basis sample` 与\n"
+                "`bnote figures <URL> --page N`。\n"
                 "本次按**没有画面**处理，别凭想象写画面。\n")
-    tiles = len(doc.get("tiles") or [])
-    cov = doc.get("coverage") or {}
-    inline = bool((cfg.get("sheet") or {}).get("inline"))
-    lines = ["**画面旁证（取样面板）**",
-             "",
-             "- 面板：%s（共 %d 格）→ 路径 `../_meta/sheets/<name>.png`" % ("、".join("`%s`" % s for s in sheets), tiles),
-             "- **只覆盖 %.1f%% 时长**（最大未采样间隔 %ss）：它**不代表全片**，没看到的地方不许推断" %
-             ((cov.get("sampled_ratio") or 0) * 100, cov.get("uncovered_max_gap_sec")),
-             "- **铁律**：面板是缩放拼图，**里面的字一律不采信**；要读字（代码、报错、页脚）必须用\n"
-             "  `bnote frames <URL> --page N --at HH:MM:SS --read` 取**全分辨率单帧**再看",
-             ""]
-    if inline:
-        lines += ["写手可以**自行决定**要不要在正文里引用面板：有信息就写一句「他在演示 X」并引用\n"
-                  "`../_meta/sheets/<name>.png`；没有信息就只在回报里提一句，**别硬凑图**。",
-                  "引用只能用这两类相对路径：`../slides/NNNN.jpg`（本模式没有）与 `../_meta/sheets/<name>.png`——\n"
-                  "**不许**写别的路径，也不许把面板里的字当原文抄。",
+    cov = doc.get("coverage") or fig_doc.get("coverage") or {}
+    inline = bool((cfg.get("figures") or {}).get("inline"))
+    lines = []
+    if sheets:
+        lines += ["**画面旁证（取样面板）**",
+                  "",
+                  "- 面板：%s（共 %d 格）→ 路径 `../_meta/sheets/<name>.png`"
+                  % ("、".join("`%s`" % s for s in sheets), len(doc.get("tiles") or [])),
+                  "- **只覆盖 %.1f%% 时长**（最大未采样间隔 %ss）：它**不代表全片**，没看到的地方不许推断" %
+                  ((cov.get("sampled_ratio") or 0) * 100, cov.get("uncovered_max_gap_sec")),
+                  "- **铁律**：面板是缩放拼图，**里面的字一律不采信**；要读字（代码、报错、页脚）必须用\n"
+                  "  `bnote frames <URL> --page N --at HH:MM:SS --read` 取**全分辨率单帧**再看",
+                  "- 面板**只是你看画面的材料**：不要在正文里引用面板（要配图用下面的插图候选）。",
                   ""]
+    if figs:
+        lines += ["**插图候选（单帧、全分辨率）**", ""]
+        for f in figs:
+            lines.append("- `%s` t=%s ｜ %s" % (f.get("name"), _ts(f.get("t")), f.get("why") or ""))
+        lines.append("")
+        if inline:
+            lines += ["**只在关键时刻引一张**，三条同时满足才算：① 画面里有与口播**指涉一致**的可见对象\n"
+                      "（界面 / 图表 / 代码 / 演示结果 / 流程图 / 公式）；② 该对象用文字说清会明显更长或更容易失真；\n"
+                      "③ 不是纯人像、纯滚动、过渡画面或装饰。**没有合适的就不引——0 张完全合格**。\n"
+                      "写法：`![他在这里演示的是 Xxx（一句话）](../_meta/figures/01.png)`，紧跟相关那一段之后；\n"
+                      "引用只能用 `../_meta/figures/<name>.png` 这一种相对路径。",
+                      ""]
+        else:
+            lines += ["本次 **`[figures].inline=false`**：插图候选只作**你看画面的材料**，\n"
+                      "**不要**在正文里引用任何图片（正文仍是纯文字；引用会被结构校验拦下）。", ""]
     else:
-        lines += ["本次 **`[sheet].inline=false`**：面板只作**你看画面的材料**，\n"
-                  "**不要**在正文里引用任何图片（正文仍是纯文字；引用会被结构校验拦下）。", ""]
+        lines += ["**插图**：本次没有插图候选（取样包为空，或媒体里没有画面）——正文**不要引用任何图片**。", ""]
     return "\n".join(lines)
 
 
@@ -391,10 +407,11 @@ def _coverage_errors(paras: list, found: list) -> list:
 
 
 def _ref_errors(md: str, paths) -> list:
-    """信息流模式的图片引用校验（M5，§3.6-5）——**只查"能不能定位"**。
+    """信息流模式的图片引用校验——**只查"能不能定位"**。
 
-    两条：① 引用不在两类白名单内（复用 `refs.unknown_targets`，**不另写正则**）；
-    ② 引用的面板名在 `sheet.json` ∪ `sheet_sample.json` 的 `tiles[].sheet` 里查不到。
+    三条：① 引用不在三类白名单内（复用 `refs.unknown_targets`，**不另写正则**）；
+    ② 引用的面板名在 `sheet.json` ∪ `sheet_sample.json` 的 `tiles[].sheet` 里查不到；
+    ③ 引用的插图名在 `_meta/figures.json` 的 `figures[].name` 里查不到（0.14.0，同"面板存在性"一套）。
 
     **t 与索引的一致性不在这里重复实现**：正文里只有路径、没有时间，结构上查不了；它归
     `sheet.verify()`（对照 `doc["basis"]` 指向的索引，容差 1e-6）——同一件事只留一个真源，
@@ -403,8 +420,8 @@ def _ref_errors(md: str, paths) -> list:
     out, seen = [], set()
     for target in refs_layer.unknown_targets(md):
         out.append({"level": "error", "owner": "text",
-                    "message": ("图片引用不在两类白名单内：%s（只认 ../slides/NNNN.jpg 与 "
-                                "../_meta/sheets/<name>.png）" % target)})
+                    "message": ("图片引用不在三类白名单内：%s（只认 ../slides/NNNN.jpg、"
+                                "../_meta/sheets/<name>.png 与 ../_meta/figures/<name>.png）" % target)})
     panels = refs_layer.iter_refs(md, "sheet")
     if panels:
         known = tools.panel_names(paths.meta_dir())
@@ -415,25 +432,36 @@ def _ref_errors(md: str, paths) -> list:
             out.append({"level": "error", "owner": "text",
                         "message": "引用了读字面板 %s，但 sheet.json / sheet_sample.json 里没有它的 tile"
                                    "（跑 bnote sheet 生成面板，或删掉这条引用）" % r.name})
+    figs = refs_layer.iter_refs(md, "figure")
+    if figs:
+        known = tools.figure_names(paths.meta_dir())
+        for r in figs:
+            if r.name in known or r.name in seen:
+                continue
+            seen.add(r.name)
+            out.append({"level": "error", "owner": "text",
+                        "message": "引用了插图 %s，但 _meta/figures.json 里没有它"
+                                   "（跑 bnote figures 生成候选，或删掉这条引用）" % r.name})
     return out
 
 
 def _quota_warns(cfg, paths, md: str) -> list:
-    """画面旁证的配额（M5）：**只扫 lecture.md**（拼装后的权威稿），时间基 = 整集时长。
+    """画面材料的配额：**只扫 lecture.md**（拼装后的权威稿），时间基 = 整集时长。
 
     不并扫 `text/NN.md`：那是中间稿，同一处引用会被双计，而且两种修法不同（重跑 assemble
     vs 重写该块）。超限只 **warn**（不拦 merge）——这是预算提醒，不是结构错误。
+    0.14.0 起配额算的是**插图**（面板只作材料，写手可引的图只有插图），上限 `[figures].max_per_video`。
     """
-    names = {r.name for r in refs_layer.iter_refs(md, "sheet")}
+    names = {r.name for r in refs_layer.iter_refs(md, "figure")}
     if not names:
         return []
-    cap = int((cfg.get("sheet") or {}).get("max_stream", 4))
+    cap = int((cfg.get("figures") or {}).get("max_per_video", 4))
     total = len(names)
     if total <= cap:
         return []
     dur = float(((paths.read_json(paths.meta, None) or {}).get("duration")) or 0)
     return [{"level": "warning", "owner": "pipeline",
-             "message": "信息流正文引用了 %d 张面板（去重后），超过上限 [sheet].max_stream=%d"
+             "message": "信息流正文引用了 %d 张插图（去重后），超过上限 [figures].max_per_video=%d"
                         "（整集时长 %s）—— 预算问题，不拦流程：删掉不必要的图，或调上限"
                         % (total, cap, ("%.0f s" % dur) if dur else "未知")}]
 

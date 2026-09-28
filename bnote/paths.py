@@ -19,6 +19,8 @@ out/<vid>/              交付物（Markdown + 图片）—— **内部结构冻
   index.md
   chapters/
   _meta/                校验报告、派单 prompt、钩子、派修与 loop 台账
+  _meta/figures/NN.png  信息流模式的**单帧插图**候选（0.14.0；面板 sheets/ 只是给写手看的材料）
+  _meta/figures.json    插图清单（t / 来源帧 / size / sha256 / 一句候选理由）
 """
 from __future__ import annotations
 
@@ -68,6 +70,11 @@ class WorkPaths:
     def sample_measure(self) -> Path: return self.sample / "measure.json"
     @property
     def overlay(self) -> Path: return self.cache / "overlay.json"
+
+    # 0.14.0 单帧插图：候选图落 out/<vid>/_meta/figures/，清单 figures.json（与 [sheet] 的面板分开）
+    def figures_dir(self) -> Path: return self.meta_dir() / "figures"
+    @property
+    def figures_json(self) -> Path: return self.meta_dir() / "figures.json"
 
     def slides(self) -> Path: return self.out / "slides"
     def chapters(self) -> Path: return self.out / "chapters"

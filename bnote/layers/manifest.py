@@ -465,11 +465,12 @@ def validate(manifest: dict | None, paths, meta: dict, transcript: dict | None,
                                        fix="多半是重切片后未跑 bnote remap，或 bundle 未刷新 slides/"))
             # 白名单之外：报出来而不是静默放行（merge 不改写它们，讲义里就是坏图）
             for target in refs_layer.unknown_targets(text):
-                errors.append(_err("图片引用不在两类白名单内：%s（只认 ../slides/NNNN.jpg 与 "
-                                   "../_meta/sheets/<name>.png）" % target, "chapter:%s" % cid, cid,
-                                   str(ch.get("body")),
+                errors.append(_err("图片引用不在三类白名单内：%s（只认 ../slides/NNNN.jpg、"
+                                   "../_meta/sheets/<name>.png 与 ../_meta/figures/<name>.png）"
+                                   % target, "chapter:%s" % cid, cid, str(ch.get("body")),
                                    fix="按契约改成 ../slides/NNNN.jpg（页号 4 位）；读字面板放 "
-                                       "_meta/sheets/ 并由 bnote sheet 生成"))
+                                       "_meta/sheets/ 并由 bnote sheet 生成；单帧插图放 "
+                                       "_meta/figures/ 并由 bnote figures 生成"))
             # 面板引用：必须在 sheet.json 里有对应 tile（否则没人能解释这张图）
             panels = [r for r in img_refs if r.kind == "sheet"]
             if panels:
@@ -480,6 +481,17 @@ def validate(manifest: dict | None, paths, meta: dict, transcript: dict | None,
                                            % refs_layer.ref_body_path(r.kind, r.name),
                                            "chapter:%s" % cid, cid, str(ch.get("body")),
                                            fix="跑 bnote sheet 生成面板（行列→帧→t 的映射只在 sheet.json），"
+                                               "或删掉这条引用"))
+            # 插图引用：必须在 figures.json 里有对应条目（0.14.0；与面板同一套"存在性"口径）
+            figs = [r for r in img_refs if r.kind == "figure"]
+            if figs:
+                known_figs = tools.figure_names(paths.meta_dir())
+                for r in figs:
+                    if r.name not in known_figs:
+                        errors.append(_err("正文引用了插图 %s，但 _meta/figures.json 里没有它"
+                                           % refs_layer.ref_body_path(r.kind, r.name),
+                                           "chapter:%s" % cid, cid, str(ch.get("body")),
+                                           fix="跑 bnote figures 生成插图候选（信息流模式的单帧插图），"
                                                "或删掉这条引用"))
             need, ctx = _reader_flags(ch)
             have = annot_count(text)   # 按块内条数（0.14.0 起块内可列表化，见 annot_count）

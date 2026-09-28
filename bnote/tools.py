@@ -213,6 +213,26 @@ def panel_names(meta_dir) -> set:
     return out
 
 
+def figure_names(meta_dir) -> set:
+    """out/<vid>/_meta/figures.json 里的插图文件名集合（没有产物时为空集）。
+
+    与 panel_names 同一条口径：白名单路径不变（只认 `../_meta/figures/<name>.png`），
+    这里只判"这张候选图真的存在"。放中性工具的理由也一样——manifest（幻灯片模式）与
+    text（信息流模式）要用同一份，两处各写一份必然漂移。
+    """
+    p = Path(meta_dir) / "figures.json"
+    if not p.exists():
+        return set()
+    try:
+        doc = json.loads(p.read_text(encoding="utf-8"))
+    except (ValueError, OSError) as exc:
+        print("[figures] ⚠ 插图清单读不了（%s）：%s —— 当作空集，但这可能是产物损坏" % (p.name, exc))
+        return set()
+    if not isinstance(doc, dict):
+        return set()
+    return {str(f.get("name")) for f in (doc.get("figures") or []) if isinstance(f, dict)}
+
+
 def check_basis_dest(dest, basis, full_name: str, sample_name: str,
                      full_dir=None, sample_dir=None) -> None:
     """写前断言（复核 2026-09-28 裁定 (b)，2026-09-28 补目录比对）：目标必须与 basis 对得上。
