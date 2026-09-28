@@ -114,8 +114,14 @@ widget_color_min      = 6      # 显著色块色调档数下限（有彩色色�
 # 判不出来时 applicability=insufficient（跑 bnote slides 时会打印一行）。
 handwriting_enabled   = true   # false = 不做手写判定（消费方退化为把笔迹当正文内容）
 handwriting_stride    = 2      # 产区域时每隔几帧量一次（区域只是审计范围，消费方按帧现算）
-handwriting_min_frac  = 0.0002 # 单帧笔画像素占比达到它才算"这帧有笔迹"
-handwriting_min_frames= 3      # 至少这么多帧命中才产出一条区域
+# **区域激活门槛**（M4b 调过一次）：零星几十个饱和像素不是手写。实测（320 宽尺度、隔帧采样）
+#   真有手写的集达到 0.001 的帧数：p22 552、p23 269、p21 200、p20 52；
+#   而 P51/P52（WPS 编辑器 / 阿里云控制台 / Windows 桌面录屏，逐帧看过）最高单帧只有
+#   0.0019/0.0018，达到 0.001 的只有 2/3 帧 —— 抬到 0.001 且至少 5 帧才产区域，
+#   这两集就不再凭空产出一条 handwriting 区域（chosen 回到 main 基线）。
+#   代价：只有零星笔迹的集也不再产区域（p24 最大 0.00075）。
+handwriting_min_frac  = 0.001  # 单帧笔画像素占比达到它才算"这帧有笔迹"
+handwriting_min_frames= 5      # 至少这么多帧命中才产出一条区域
 handwriting_pad       = 0.01   # 包围盒外扩（占画面比例）
 handwriting_sat_min   = 0.45   # 饱和度下限（笔画是饱和色，印刷灰字不是）
 handwriting_val_min   = 0.35   # 亮度下限（排除暗色块）
@@ -123,7 +129,10 @@ handwriting_hue_max   = 45.0   # 暖色窗下界：h <= 此值（红/橙笔）
 handwriting_hue_min   = 320.0  # 暖色窗上界：h >= 此值（红笔的另一侧）
 handwriting_blue_min  = 0.0    # 蓝窗：0/0 = 关闭。**实测据**：幻灯片自身的蓝色标题字与青色块
 handwriting_blue_max  = 0.0    #   会被一起涂白（p22 002501 的蓝色小标题），伤正文，所以默认关
-handwriting_light_min = 0.65   # 笔迹邻近背景的亮度下限（写在浅底上）
+handwriting_light_min = 0.80   # 笔迹邻近背景的亮度下限（笔写在浅底上）。M4b 从 0.55/0.65 收到
+                                #   0.80 的依据：桌面壁纸/网页深色区/IDE 主题的局部亮度都低于它，
+                                #   那里的饱和像素是图标与 UI（实测桌面帧 0.0049→0.00009），
+                                #   而幻灯片红笔只掉 30%~80%、OCR 对照结论不变
 # 判据是"**笔画 vs 实心色块**"，按**厚度**分（不是按面积/密度）：
 #   对饱和掩膜做 handwriting_block_erode 次 4 邻域腐蚀，还活着的像素说明它所在连通域两个方向
 #   都至少有 2k+1 像素厚 → 那是红底白字条 / 填充的流程框；核再膨胀 k+1 圈圈住整块，整块**不涂白**。
@@ -139,8 +148,21 @@ handwriting_ink_max      = 0.62 # 深色印刷字阈值（沿用 segment 墨迹�
 handwriting_bg_window    = 15  # 判"邻近背景亮不亮"的滑窗边长
 
 [roles]
-# M4 帧角色（bnote/layers/roles.py）：把**已抽出的帧**判成五个角色之一，供切片层实现
-# "整页优先"选帧（段内只要存在 full_page 候选，终态就必须选整页）。
+# M4b：整屏应用/录屏（app_screen）判据 —— 判据与默认值在 bnote/segmenters/framesig.py 的
+# APP_DEFAULTS（唯一真源），这里只是可覆盖的副本。**app_screen 仍是整屏内容，整页优先照旧可作
+# 主图**；它唯一的特别之处是**不走手写涂白**（IDE/浏览器/终端里没有手写，彩色 UI 被当成彩色笔画
+# 只会伤 OCR 与帧差 —— P51/P52 实测 chosen 因此漂移 10/27 与 3/14 段）。
+# 实测（320 宽尺度，16 张标注帧）：APP fg 0.018~0.028 / bands 13~23 / run 1~2；
+#                                课件 fg 0.017~0.279 / bands 4~9   / run 1~4。
+app_fg_max          = 0.032  # ① 前景像素占比上限（UI 大半个屏是背景）
+app_bands_min       = 12     # ② 行带数下限（代码/文件树/终端行很多）
+app_run_max         = 2.0    # ③ 前景水平游程中位数上限（UI 字更小）
+app_border_min      = 0.0    # ④ 边带前景占比下限：默认 0（不参与判定）——浏览器页页边距也干净
+                             #   （0.007~0.017），而带红笔的课件反而 0.39~0.53，它只作记录值
+app_gap             = 0.20   # 与底色差多少算前景
+app_border_band     = 0.04   # 边带宽度（只用于记录值）
+# M4 帧角色（bnote/layers/roles.py）：把**已抽出的帧**判成六个角色之一，供切片层实现
+# "整页优先"选帧（段内只要存在可当主图的候选 —— full_page 或 app_screen —— 就不能选别的）。
 # 输入只用已抽出的帧 + overlay.json（遮挡区从统计里排除）+ 本批帧自己算出的笔画中位数，
 # **不新增解码**；判据名与关键数字逐帧写进 segments.json / slides.json 的 role_evidence。
 # 判不出就给**低置信**的 full_page（见 roles.py 的说明），不硬判。
@@ -232,6 +254,10 @@ page_cut_only_cuts  = true      # 只有"硬切"（大幅帧差）才算换页�
 page_cut_percentile = 0.85      # 硬切门槛：帧差分位数
 page_cut_multiple   = 3.0       # 硬切门槛的辅助倍数
 page_cut_lookback_sec = 1.5     # 稳定段起点前多久内出现硬切才算换页
+# M4b「遮挡最少」：同页候选中挑遮挡最少的（判据数字 = 最大连通前景块占比，见 roles._occlusion）
+occ_score_tol       = 0.10      # 只在"信息量接近"的候选之间比遮挡（打分 >= 最高分×(1-它)）；
+                                #   不设这个门槛会把动画中途的不完整帧选成主图
+occ_min_gain        = 0.10      # 遮挡要明显更少才值得换（占比差 >= 它；0.10 ≈ 画面 10%）
 ocr_consensus       = true      # 对前两名候选各跑一次 OCR 并按行合并（降低单次识别误差）
 auto_caption_strip  = true      # 自动识别烧进画面的口播字幕条并排除出稳定性判定与 OCR
 caption_strip_ratio = 0.14      # 字幕条高度占画面比例（自下而上）

@@ -71,7 +71,8 @@ from PIL import Image
 
 # 彩色细笔画（手写笔迹）判据的实现放在 segmenters/framesig.py（叶子工具）：它同时被本模块
 # （产出手写区域）与 stable.py 的签名（把笔迹从帧差里挖掉）用。一份实现两处用，避免漂移。
-from ..segmenters.framesig import STROKE_DEFAULTS, stroke_mask, stroke_params
+from ..segmenters.framesig import (STROKE_DEFAULTS, app_params, app_screen_metrics,
+                                   stroke_mask, stroke_params)
 
 SCHEMA = "bnote-overlay/1"
 ALGO = "bnote-overlay/1"
@@ -126,8 +127,8 @@ def params(cfg: dict) -> dict:
         # —— M4 新增：手写笔迹（判据实现在 segmenters/framesig.py）——
         "handwriting_enabled": bool(ov.get("handwriting_enabled", True)),
         "handwriting_stride": int(ov.get("handwriting_stride", 2)),
-        "handwriting_min_frac": float(ov.get("handwriting_min_frac", 0.0002)),
-        "handwriting_min_frames": int(ov.get("handwriting_min_frames", 3)),
+        "handwriting_min_frac": float(ov.get("handwriting_min_frac", 0.001)),
+        "handwriting_min_frames": int(ov.get("handwriting_min_frames", 5)),
         "handwriting_pad": float(ov.get("handwriting_pad", 0.01)),
         **{k: float(ov.get(k, v)) for k, v in STROKE_DEFAULTS.items()},
     }
@@ -146,7 +147,7 @@ def rel_zones(zone: float):
 
 
 # ---------------------------------------------------------------- 一遍扫帧
-def scan(frames_dir: Path, files: list, p: dict) -> dict:
+def scan(frames_dir: Path, files: list, p: dict, app: dict | None = None) -> dict:
     """流式扫一遍已抽出的帧，攒出统计量（不落逐帧中间产物，内存只留剖面与各角最好的一帧）。
 
     返回 dict：
@@ -178,6 +179,7 @@ def scan(frames_dir: Path, files: list, p: dict) -> dict:
     hsum = None
     hfrac_max = 0.0
     hframes = 0
+    app_skipped = 0            # 因"整屏应用/录屏"而跳过手写判定的采样帧数（写进 evidence）
 
     thr = float(p["diff_threshold"]) * 0.6     # 旧实现的门槛：带内平均差 > 0.6×diff_threshold
     lb = int(LEGACY_H * (1.0 - float(p["caption_strip_ratio"])))   # 固定底部带（旧口径）
@@ -228,11 +230,18 @@ def scan(frames_dir: Path, files: list, p: dict) -> dict:
                 wbest[corner] = {"hue": hue, "edge": edge, "crop": sub,
                                  "zone": (zl, zt, zr, zb)}
         if hw is not None and (fi % max(1, int(p["handwriting_stride"]))) == 0:
-            sm = stroke_mask(np.asarray(rgbim.resize(
+            small = np.asarray(rgbim.resize(
                 (PROFILE_W * 2, max(2, int(round(PROFILE_W * 2 * h / float(w))))),
-                Image.BILINEAR), dtype=np.float32) / 255.0,
-                stroke_params(p))
-            if sm.size:
+                Image.BILINEAR), dtype=np.float32) / 255.0
+            # M4b 守卫：整屏应用/录屏（IDE/浏览器/终端）**不参与手写判定** —— 那里的彩色像素是
+            # UI，不是手写；不排掉会让 P51/P52 这种录屏集凭空产出一条 handwriting 区域，
+            # 进而把整集的帧差/OCR 都涂白（实测 chosen 漂移 10/27 与 3/14 段）。
+            if app_screen_metrics(small.mean(axis=2), small, app or app_params(None))["hit"]:
+                app_skipped += 1
+                sm = np.zeros((1, 1), dtype=bool)      # 空掩膜：本帧不计入统计
+            else:
+                sm = stroke_mask(small, stroke_params(p))
+            if sm.size > 1:
                 frac = float(sm.mean())
                 if hsum is None or hsum.shape != sm.shape:
                     hsum = np.zeros(sm.shape, dtype=np.float32)
@@ -260,10 +269,10 @@ def scan(frames_dir: Path, files: list, p: dict) -> dict:
         return {"R": None, "mean": None, "chg": None, "widget": {}, "heard": {},
                 "pairs": 0, "size": size, "legacy": None,
                 "stroke_sum": None, "stroke_frames": 0, "stroke_frac_max": 0.0,
-                "stroke_hits": []}
+                "stroke_hits": [], "app_skipped": app_skipped}
     return {
         "stroke_sum": hsum, "stroke_frames": hframes, "stroke_frac_max": hfrac_max,
-        "stroke_hits": hw,
+        "stroke_hits": hw, "app_skipped": app_skipped,
         "R": np.array(rows, dtype=np.float32),
         "mean": sum_g / n,
         "chg": chg / max(1, len(rows)),
@@ -560,6 +569,7 @@ def handwriting_regions(files: list, scan_out: dict, p: dict) -> tuple:
     return [{"kind": "handwriting", "box": box, "confidence": round(conf, 2),
              "evidence": {"criterion": "color_stroke",   # 成功路径：box 一定是四元组（判不出则不落区域）
                           "stroke_frames": len(hits), "frames_sampled": sampled,
+                          "app_skipped_frames": int(scan_out.get("app_skipped") or 0),
                           "stride": int(p["handwriting_stride"]),
                           "stroke_frac_max": round(frac_max, 5),
                           "min_frac": float(p["handwriting_min_frac"]),
@@ -581,6 +591,8 @@ def handwriting_regions(files: list, scan_out: dict, p: dict) -> tuple:
                           "criterion_note": "厚度 >= 2*block_erode+1 的连通域算实心色块，整块不涂白"
                                             "（红底白字条/填充框上的字得以保留）；只有笔画涂白，"
                                             "且最后一圈膨胀不长进深色印刷字",
+                          "guard_note": "M4b：整屏应用/录屏（app_screen）帧既不参与判定也不涂白"
+                                        "（见 app_skipped_frames 与 framesig.APP_DEFAULTS）",
                           "note": apply_note},
              "applicability": OK}], None
 
@@ -613,7 +625,7 @@ def analyze(cfg: dict, paths, frames=None) -> dict:
     if len(files) < frames_min:
         applies.append("帧数 %d < 门槛 %d，统计量不足" % (len(files), frames_min))
     else:
-        out = scan(paths.frames, files, p)
+        out = scan(paths.frames, files, p, app_params((cfg.get("roles") or {})))
         size = out["size"]
         if out["R"] is None or out["pairs"] < 8:
             applies.append("可用帧对只有 %d，变化率判据不成立" % out["pairs"])

@@ -24,14 +24,21 @@ import json
 from pathlib import Path
 
 
-def _whiten_strokes(im, params, width: int = 320):
-    """把一帧里的**彩色细笔画**（手写笔迹）涂白：先缩到判据尺度算掩膜，再按最近邻放大回原尺寸。"""
+def _whiten_strokes(im, params, app=None, width: int = 320):
+    """把一帧里的**彩色细笔画**（手写笔迹）涂白：先缩到判据尺度算掩膜，再按最近邻放大回原尺寸。
+
+    传 app（[roles] 段的 app_* 参数）时先判整屏应用/录屏：是就**整帧原样返回**（M4b 的手写
+    守卫）—— IDE/浏览器/终端里没有手写，把彩色 UI 当笔画涂白只会伤 OCR（P51/P52 实测）。
+    """
     from PIL import Image
     import numpy as np
-    from ..segmenters.framesig import stroke_mask, stroke_params
+    from ..segmenters.framesig import (app_params, app_screen_metrics, gray_at, stroke_mask,
+                                       stroke_params)
     w, h = im.size
     hh = max(2, int(round(width * h / float(w))))
     small = np.asarray(im.resize((width, hh), Image.BILINEAR), dtype=np.float32) / 255.0
+    if app and app_screen_metrics(small.mean(axis=2), small, app_params(app))["hit"]:
+        return im
     m = stroke_mask(small, stroke_params(params))
     if not m.any():
         return im
@@ -54,6 +61,8 @@ class Ocr:
                 self.strokes = dict(doc.get("params") or {})
         except Exception:
             self.strokes = None
+        # M4b：整屏应用守卫（同一份 [roles] 参数；strokes 生效时才需要）
+        self.app = dict((cfg.get("roles") or {})) if self.strokes else None
         if not cfg["ocr"]["enabled"]:
             print("[ocr] 配置关闭，跳过 OCR（退化为墨迹打分）")
             return
@@ -106,6 +115,9 @@ class Ocr:
             suffix = "_r%d%d%d%d" % tuple(int(x * 100) for x in region)
         if self.strokes:
             suffix += "_h%s" % self._params_key(self.strokes)
+        if self.app:
+            # 守卫参数也进缓存键：换了 app_* 阈值，涂不涂白会变，不能复用旧结果
+            suffix += "_a%s" % self._params_key(self.app)
         if suffix:
             key = cache.with_name(cache.stem + suffix + ".json")
         if key.exists():
@@ -117,7 +129,7 @@ class Ocr:
                 from PIL import Image, ImageDraw
                 im = Image.open(img).convert("RGB")
                 if self.strokes:                      # M4：先涂白手写笔迹，再按 region/masks 裁
-                    im = _whiten_strokes(im, self.strokes)
+                    im = _whiten_strokes(im, self.strokes, self.app)   # M4b：app_screen 帧跳过
                 w, h = im.size
                 if use_masks:
                     draw = ImageDraw.Draw(im)
