@@ -533,7 +533,7 @@ max_stream         = 4          # 信息流旁证上限（预留给 M5）
 # enabled / inline 的口径同 [sheet]：显式 bnote figures 不受 enabled 拦（显式命令就是要它跑）；
 # bnote stream --with-vision 视为打开 enabled（它本来就是"要画面旁证"的显式 opt-in）。
 enabled            = false      # 是否允许自动/流水线生成插图候选（显式 bnote figures 不受拦）
-inline             = false      # 是否允许写手在正文里引用插图 ../_meta/figures/NN.png
+inline             = false      # 是否允许写手在正文里引用插图（前缀按正文文件：章节 ../_meta/figures/NN.png；信息流讲稿 _meta/figures/NN.png）
 max_per_video      = 4          # 整集上限：候选张数（超过按窗口顺序截断）与引用配额 warn 都用它
 min_change         = 0.02       # 窗口内"显著画面变化"的下限（相邻取样帧的归一化平均绝对差）；低于它取窗口中点帧
 diff_size          = [32, 18]   # 算帧差用的缩略尺寸（宽 x 高，灰度）——只为比大小，不读字

@@ -101,6 +101,10 @@ CONTRACT = """# 正文与小节的格式契约（工具校验，写手必须照�
   （0.14.0；名字必须能在 `_meta/figures.json` 的 `figures[].name` 里查到，由 `bnote figures` 产出）——
   面板是**给写手看的材料**（缩放拼图），插图才是**可引用的图**（全分辨率单帧）；三类之外的引用**不认**——
   既不会被校验放过，也不会被 `merge`/`remap` 改写（相对引用永远有效的前提就是这条白名单）；
+* **前缀取决于正文文件在哪**（0.15.1）：上面的 `../` 是**章节正文**（在 `out/<vid>/chapters/` 下）的形态；
+  信息流模式的交付稿 `out/<vid>/lecture.md` 就在 `out/<vid>/` 下，那里的引用**不带** `../`
+  （`_meta/figures/NN.png`），见 `references/contracts/text_writer.md`；一条引用解析到哪，
+  一律以**它所在的那个文件**为基准（工具用 `refs.ref_path_in` 校验）；
 * 面板图是**缩放拼图**，里面的字**一律不采信**：要读字用 `bnote frames --read` 取**媒体原生分辨率**单帧（缓存帧本身已是原生尺寸时直接复用，sha256 与 `cache/frames/` 那张逐字节相同）；
 * ### 小结、### 思考 用小节内的三级标题。
 
@@ -131,6 +135,7 @@ CONTRACT = """# 正文与小节的格式契约（工具校验，写手必须照�
 | 图片引用不在三类白名单内（非 ../slides/NNNN.jpg、../_meta/sheets/<name>.png 或 ../_meta/figures/<name>.png） | error | chapter:<id> |
 | 正文引用的面板图在 _meta/sheet.json 里找不到对应 tile | error | chapter:<id> |
 | 正文引用的插图在 _meta/figures.json 里找不到对应条目 | error | chapter:<id> |
+| 正文引用的图按**章文件所在目录**（chapters/）解析不到真实文件（前缀写错 / 图被删改名） | error | chapter:<id> |
 | 多图小节缺每图时间行 | error | chapter:<id> |
 | corrections 缺 wrong/right/evidence | error | chapter:<id> |
 | 推断类校正(basis=context) / 存疑(uncertainties) 没在正文就地标注 | error | chapter:<id> |
