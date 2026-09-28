@@ -25,7 +25,14 @@ STROKE_DEFAULTS = {
     "handwriting_hue_min": 320.0,     # 暖色窗上界：h >= 此值（红笔的另一侧）
     "handwriting_blue_min": 0.0,      # 蓝窗（0/0 = 关闭：实测幻灯片自身的蓝色标题字会被误挖）
     "handwriting_blue_max": 0.0,
-    "handwriting_light_min": 0.55,    # 笔迹邻近背景的亮度下限（写在浅底上）
+    "handwriting_light_min": 0.80,    # 笔迹邻近背景的亮度下限：笔写在**浅底**（幻灯片白底/浅灰底）上。
+                                      #   M4b 实测从 0.55/0.65 收到 0.80：桌面录屏（壁纸+图标）
+                                      #   0.0049→0.00009、浏览器/控制台页与 IDE 主题的彩色元素
+                                      #   基本清零，而幻灯片上的红笔只掉 30%~80%（001421
+                                      #   0.00275→0.00141、000607 0.0174→0.0137），仍远高于
+                                      #   handwriting_min_frac；OCR 对照结论不变（0.67 保住、
+                                      #   一大/粗筛仍清）。代价：灰底很深的课件上笔迹覆盖变少
+                                      #   （p21 000466 0.0056→0.00022）。
     "handwriting_block_erode": 3,     # 判"实心色块"的腐蚀次数：>=3 次还活着 = 厚度 >=7 px
                                       #   （320 宽分析尺度）→ 红底白字条/填充框；笔画 1 次就没了
     "handwriting_block_pad": 3,       # 色块核之外再多保护几圈（见 _block_core 的实测说明）
@@ -33,6 +40,84 @@ STROKE_DEFAULTS = {
                                       #   不许长进这些像素，免得把被笔划过的数字啃掉
     "handwriting_bg_window": 15,      # 判"邻近背景亮不亮"的滑窗边长
 }
+
+
+# 整屏应用/录屏（IDE / 浏览器 / 终端 / 桌面）判据的**唯一真源**：默认值在这里，
+# [roles] 段可以覆盖，判定数字逐帧写进 role_evidence。阈值在 **320 宽**的分析尺度上标定。
+# 实测（P51/P52/P53 的 VS Code 画面 vs 稀疏底课件）—— 四个标量要一起用：
+#   ① fg_frac：IDE 大半个屏是 UI 背景，前景只占 1.3%~2.2%；但稀疏课件也能低到 1.8%~2.9%，
+#      所以它只能当"上限"，单独用会误判（p49/p50 的深底课件）。
+#   ② bands：行带数（IDE 一行行的代码/文件树/终端很多，实测 8~14；课件 5~8）。
+#   ③ border_fg：画面四周 4% 边带里的前景占比 —— IDE 有侧栏/标签栏/状态栏、浏览器整屏没有
+#      页边距，实测 0.02~0.04；幻灯片的页边距让边带干净（0.00~0.01）。
+#   ④ run_px：前景水平游程中位数（UI 字更小，实测 1~2 px；幻灯片正文 >=3 px）。
+# 命中样例：P51 002264、P52 000430、P53 000212/001250、p20 001427/001472（浏览器里的页面）。
+# 实测（320 宽尺度，16 张标注帧：8 张 IDE/浏览器 + 8 张课件）：
+#   | 组 | fg_frac | bands | run_px |
+#   | APP  | 0.018~0.028 | 13~23 | 1~2 |
+#   | 课件 | 0.017~0.279 |  4~9  | 1~4 |
+# 三条一起用（fg + bands + run）全部 16 张判对；border_fg 不够可靠（浏览器页的页边距也很干净：
+# 实测 0.007~0.017，而带红笔的课件反而有 0.39~0.53），所以它只作**记录值**，不参与判定。
+APP_DEFAULTS = {
+    "app_fg_max": 0.032,       # ① 前景像素占比上限（UI 大半个屏是背景）
+    "app_bands_min": 12,       # ② 行带数下限（IDE/终端的代码、文件树、终端行很多）
+    "app_border_min": 0.0,     # ③ 边带前景占比下限：默认关闭（0），只记录数字（见上表）
+    "app_run_max": 2.0,        # ④ 前景水平游程中位数上限（px，320 宽尺度；UI 字更小）
+    "app_gap": 0.20,           # 与底色差多少算前景
+    "app_border_band": 0.04,   # 边带宽度（占画面比例；只用于 ③ 的记录值）
+}
+
+
+def app_params(raw: dict | None) -> dict:
+    """从 [roles] 配置（或任意字典）里取"整屏应用"判据参数；缺项用默认值。"""
+    src = raw or {}
+    return {k: float(src.get(k, v)) for k, v in APP_DEFAULTS.items()}
+
+
+def gray_at(im_gray, width: int) -> np.ndarray:
+    """把灰度图缩到 width 宽取浮点数组（0..1）。"""
+    w, h = im_gray.size
+    hh = max(2, int(round(width * h / float(w))))
+    return np.asarray(im_gray.resize((width, hh), Image.BILINEAR), dtype=np.float32) / 255.0
+
+
+def app_screen_metrics(gray: np.ndarray, rgb: np.ndarray, ap: dict) -> dict:
+    """整屏应用/录屏的四个标量 + 命中与否（gray/rgb 都必须是 **320 宽**尺度）。"""
+    hist, _ = np.histogram(gray, bins=20, range=(0.0, 1.0))
+    mode_frac = float(hist.max()) / float(gray.size)
+    bg = float((int(np.argmax(hist)) + 0.5) * 0.05)
+    fg = np.abs(gray - bg) > float(ap["app_gap"])
+    fh, fw = gray.shape
+    fg_frac = float(fg.mean())
+    prof = fg.any(axis=1)
+    bands = int((np.count_nonzero(prof[1:] != prof[:-1]) + (1 if prof[:1].any() else 0)) // 2)
+    band = max(1, int(round(fh * float(ap["app_border_band"]))))
+    bcols = max(1, int(round(fw * float(ap["app_border_band"]))))
+    cells = np.zeros_like(fg)
+    cells[:band, :] = True
+    cells[-band:, :] = True
+    cells[:, :bcols] = True
+    cells[:, -bcols:] = True
+    border = float((fg & cells).sum() / max(1, int(cells.sum())))
+    runs = []
+    for y in range(0, fh, 2):
+        row = fg[y].astype(np.int8)
+        if not row.any():
+            continue
+        d = np.diff(np.concatenate(([0], row, [0])))
+        s = np.flatnonzero(d == 1)
+        e = np.flatnonzero(d == -1)
+        runs.append(e - s)
+    L = np.concatenate(runs) if runs else np.array([0])
+    L = L[L <= 40]
+    run_px = float(np.median(L)) if L.size else 0.0
+    hit = bool(fg_frac <= float(ap["app_fg_max"]) and bands >= int(ap["app_bands_min"])
+               and border >= float(ap["app_border_min"])
+               and 0.0 < run_px <= float(ap["app_run_max"]))
+    # ③ 的默认下限是 0（即不参与判定）：border 命中与否只体现在 border >= 0 上，数字照记
+    return {"fg_frac": round(fg_frac, 4), "bands": bands, "border_fg": round(border, 4),
+            "run_px": round(run_px, 2), "mode_frac": round(mode_frac, 4), "bg": round(bg, 4),
+            "hit": hit}
 
 
 def stroke_params(raw: dict | None) -> dict:
@@ -138,7 +223,7 @@ def stroke_mask(rgb: np.ndarray, sp: dict) -> np.ndarray:
 
 
 def signature(path: Path, region=(0.0, 0.0, 1.0, 1.0), masks=None, strokes=None,
-              stroke_width: int = 320):
+              stroke_width: int = 320, app=None):
     """返回 (small_gray_float32[27,48], dhash_uint64)。
 
     传入 masks（overlay.json 的 regions 框）时**先把它们涂成同一片白**再算签名。涂成同一个
@@ -149,16 +234,28 @@ def signature(path: Path, region=(0.0, 0.0, 1.0, 1.0), masks=None, strokes=None,
     把彩色细笔画涂白（M4 的"笔迹不进帧差/墨迹"）。为什么按帧而不是按区域：笔迹在画面上是
     移动、累积的（p22 一页上越写越多），一个全局框会把其余帧同位置的正文也挖掉；而"这一帧
     哪里是笔迹"在帧上是能直接看出来的。判据参数来自 overlay.json，所以文件仍然是接口。
+
+    传入 app（[roles] 段的 app_* 参数）时，先判"这一帧是不是整屏应用/录屏"（app_screen）：
+    是就**整帧跳过涂白** —— UI 的彩色元素不是手写笔迹，挖掉只会伤 OCR 与帧差（M4b）。
     """
     with Image.open(path) as im0:
-        im = im0.convert("L")
+        im_gray = im0.convert("L")
+        im = im_gray
         if strokes:
             sp = stroke_params(strokes)
             rgb = rgb_at(im0, stroke_width, im.size)
-            m = stroke_mask(rgb, sp)
-            if m.any():
-                mi = Image.fromarray((m * 255).astype(np.uint8), mode="L").resize(im.size, Image.NEAREST)
-                im = Image.composite(Image.new("L", im.size, 255), im, mi)
+            # **整屏应用守卫**（M4b）：IDE/浏览器/终端录屏里没有手写，把它们的彩色 UI 当成
+            # 彩色笔画涂白只会有害（P51/P52 实测 chosen 漂移 10/27 与 3/14 段）。判据与阈值
+            # 见 APP_DEFAULTS：命中就整帧跳过涂白（不调阈值去兼容两种画面）。
+            skip = False
+            if app:
+                skip = app_screen_metrics(gray_at(im_gray, stroke_width), rgb,
+                                          app_params(app))["hit"]
+            if not skip:
+                m = stroke_mask(rgb, sp)
+                if m.any():
+                    mi = Image.fromarray((m * 255).astype(np.uint8), mode="L").resize(im.size, Image.NEAREST)
+                    im = Image.composite(Image.new("L", im.size, 255), im, mi)
     if masks:
         from PIL import ImageDraw
         w0, h0 = im.size

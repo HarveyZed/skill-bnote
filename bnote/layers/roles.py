@@ -16,7 +16,7 @@ full_page 候选，终态就必须选整页）—— 判据要**便宜、可解�
 3. 本批帧自己算出的**笔画尺度中位数**（见下）—— zoom_detail 需要"比本集整页的字更大"
    这个相对量，不需要 measure.json。
 
-五个角色与判据（判据名即 role_evidence.criterion，全部落进 signals）
+六个角色与判据（判据名即 role_evidence.criterion，全部落进 signals）
 ------------------------------------------------------------------------
 | 角色 | 判据名 | 成立条件（都要成立） |
 |---|---|---|
@@ -24,8 +24,17 @@ full_page 候选，终态就必须选整页）—— 判据要**便宜、可解�
 | insert | letterbox | 黑边总宽度**明显大于本集常态**（>= max(letterbox_min, 本集中位数 + letterbox_delta)） |
 | presenter | face_dominant | 肤色像素占比 >= presenter_skin_min，且有足量深像素（照片/现场镜头） |
 | zoom_detail | stroke_scale | 笔画尺度 >= zoom_stroke_multiple × 本批中位数，且内容铺满整幅、仍是浅底深字 |
-| full_page | layout_grid | 底色成片（light_frac 或直方图峰占比 >= fullpage_light_min）+ 有边 + 有版面 + 无大面积肤色 |
+| app_screen | ui_dense_small_text | 整屏应用/录屏：前景占比小 + 行带多 + 前景笔画很短（UI 字小） |
+| full_page | layout_grid | 底色成片（模式无关明暗）+ 有前景 + 有边 + 有版面 + 无大面积肤色 |
 | 兜底 | layout_weak | 都不成立时给**低置信**（0.30）的 full_page |
+
+**app_screen 的语义（M4b）**：IDE / 浏览器 / 终端 / 桌面录屏 —— **仍是整屏内容**，所以它是
+PAGE_ROLES 之一（整页优先照旧可以选它当主图、check 也认它）；唯一的差别是**不走手写涂白**
+（那里没有手写，UI 的彩色像素被当成彩色笔画涂白只会伤 OCR 与帧差）。判据与实测表见
+segmenters/framesig.py 的 APP_DEFAULTS。
+
+**occlusion 不是角色**，是给切片层用的标量：最大连通前景块占整幅的比例（见 _occlusion）。
+切片层在"信息量接近"的同页候选之间挑**遮挡最少**的那张（M4b-3：人/桌面挡住页面时换更完整的一张）。
 
 **为什么这样判**（每条都对着实测样本，不凭想象）：
 * 出镜/现场照片（p20 356.9~417.5 s，6 张候选帧）实测 skin_frac 0.103~0.104，而同集幻灯片
@@ -56,8 +65,15 @@ from __future__ import annotations
 import numpy as np
 from PIL import Image
 
+from ..segmenters.framesig import app_params, app_screen_metrics
+
 SCHEMA = "bnote-roles/1"
-ROLES = ("full_page", "zoom_detail", "presenter", "insert", "blank")
+# 六值枚举（§3.5-1 的五值 + M4b 的 app_screen）
+ROLES = ("full_page", "app_screen", "zoom_detail", "presenter", "insert", "blank")
+# "可以当主图"的角色：整页优先挑的就是它们。app_screen **仍是整屏内容**（IDE / 浏览器 /
+# 终端 / 桌面录屏），语义上等价于一页，所以它和 full_page 一样有资格当主图；差别只有一条：
+# app_screen 帧**不走手写涂白**（那里没有手写，见 framesig.APP_DEFAULTS 的说明）。
+PAGE_ROLES = ("full_page", "app_screen")
 
 
 # ---------------------------------------------------------------- 参数
@@ -99,6 +115,9 @@ def params(cfg: dict) -> dict:
         "edge_eps": float(r.get("edge_eps", 0.08)),
         "skin_sat_min": float(r.get("skin_sat_min", 0.15)),
         "skin_sat_max": float(r.get("skin_sat_max", 0.68)),
+        # 整屏应用/录屏判据（app_screen）：唯一真源在 segmenters/framesig.py 的 APP_DEFAULTS，
+        # 这里只把 [roles] 的覆盖项接进来（手写守卫读同一份参数）
+        **app_params(r),
     }
 
 
@@ -160,6 +179,46 @@ def _edge_mask(gray: np.ndarray, eps: float) -> np.ndarray:
     gx[:, :-1] = np.abs(np.diff(gray, axis=1)) > eps
     gy[:-1, :] = np.abs(np.diff(gray, axis=0)) > eps
     return gx | gy
+
+
+def _occlusion(gray: np.ndarray, gap: float, cells_w: int = 32, cells_h: int = 18,
+               cell_frac: float = 0.25) -> float:
+    """遮挡程度：**最大连通前景块**占整幅的比例（M4b「遮挡最少」的判据数字）。
+
+    为什么粗网格 + 连通域：人/手/桌面挡在页面上时是**一整块**连成片的前景，而正文是散落的
+    小块。把 320 宽的前景掩膜降到 32x18 的格子（每格 >= cell_frac 前景算"占住"），再取最大
+    4 连通块 —— 大块占比高就是被挡得多。
+    只用于**同页候选之间**的相对比较（同一页的背景与版式相同，所以遮挡差异会直接体现出来），
+    不跨页比、也不当角色判据。
+    """
+    fh, fw = gray.shape
+    m = (np.abs(gray - float(np.median(gray))) > gap)
+    h, w = fh // cells_h, fw // cells_w
+    if h < 1 or w < 1:
+        return 0.0
+    grid = m[:h * cells_h, :w * cells_w].reshape(cells_h, h, cells_w, w).mean(axis=(1, 3))
+    occ = grid >= cell_frac
+    if not occ.any():
+        return 0.0
+    seen = np.zeros_like(occ, dtype=bool)
+    best = 0
+    for sy in range(cells_h):
+        for sx in range(cells_w):
+            if not occ[sy, sx] or seen[sy, sx]:
+                continue
+            stack = [(sy, sx)]
+            seen[sy, sx] = True
+            n = 0
+            while stack:
+                y, x = stack.pop()
+                n += 1
+                for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                    yy, xx = y + dy, x + dx
+                    if 0 <= yy < cells_h and 0 <= xx < cells_w and occ[yy, xx] and not seen[yy, xx]:
+                        seen[yy, xx] = True
+                        stack.append((yy, xx))
+            best = max(best, n)
+    return round(best / float(cells_h * cells_w), 4)
 
 
 def _stroke_px(gray_hi: np.ndarray, dark_max: float, max_run: int = 32) -> float:
@@ -234,6 +293,7 @@ def features(cfg: dict, path, masks=None, p: dict | None = None) -> dict:
         rgb = _resize_rgb(im, p["analyze_width"])
         gray = _resize_gray(im_gray, p["analyze_width"])
         gray_hi = _resize_gray(im_gray, p["stroke_width"])
+        rgb_hi = _resize_rgb(im, p["stroke_width"])
         size = [int(im.width), int(im.height)]
     fh, fw = gray.shape
     keep = _keep_grid(masks, fw, fh)
@@ -283,6 +343,7 @@ def features(cfg: dict, path, masks=None, p: dict | None = None) -> dict:
     border_cells[:, -bcols:] = True
     border_fg_frac = _frac(con_keep & border_cells, keep) / max(1e-6, _frac(border_cells, keep))
     bt, bb, bl, br, bar_window_mean = _bars(gray, p["letterbox_dark_max"], p["letterbox_line_frac"])
+    app = app_screen_metrics(gray_hi, rgb_hi, {k: float(v) for k, v in p.items() if k.startswith("app_")})
     return {
         "std": float(gray.std()),
         "mean": float(gray.mean()),
@@ -296,6 +357,11 @@ def features(cfg: dict, path, masks=None, p: dict | None = None) -> dict:
         "sat_frac": _frac(saturated, keep),
         "median": round(med, 4),
         "mode_frac": round(mode_frac, 4),
+        # 整屏应用/录屏的四个标量（320 宽尺度；判据与阈值见 framesig.APP_DEFAULTS）
+        "app": app,
+        "fg_run_px": app["run_px"],
+        # M4b「遮挡最少」的判据数字：最大连通前景块占比（只作同页候选之间的相对比较）
+        "occlusion": _occlusion(gray_hi, p["fg_gap"]),
         "stroke_thr": round(stroke_thr, 4),
         "stroke_px": _stroke_px(gray_hi, stroke_thr),
         "content_frac": round(content_frac, 4),
@@ -314,7 +380,7 @@ def _signals(feat: dict, criterion: str, conf: float, **extra) -> dict:
     """统一的 evidence：判据名 + 置信 + 关键数字（契约 §3.5-1 要求三者都在）。"""
     keys = ("white_frac", "light_frac", "fg_frac", "bg", "dark_frac", "edge_frac", "skin_frac",
             "sat_frac", "std", "mean", "median", "mode_frac", "stroke_px", "stroke_thr",
-            "content_frac", "border_fg_frac", "bands", "bar_window_mean",
+            "content_frac", "border_fg_frac", "bands", "fg_run_px", "bar_window_mean",
             "bar_top", "bar_bottom", "bar_left", "bar_right")
     sig = {k: round(float(feat[k]), 4) for k in keys}
     sig.update(extra)
@@ -377,6 +443,17 @@ def classify(feat: dict, p: dict, stroke_med: float | None = None,
                                        stroke_median=round(float(stroke_med), 3),
                                        ratio=round(ratio, 3),
                                        multiple=p["zoom_stroke_multiple"])
+    # 4.5) app_screen：整屏应用/录屏（IDE / 浏览器 / 终端 / 桌面）。四个标量一起判，
+    #      阈值与实测依据见 framesig.APP_DEFAULTS；命中意味着这一帧**不走手写涂白**。
+    if feat["app"]["hit"]:
+        a = feat["app"]
+        conf = min(0.85, 0.45 + 0.2 * (feat["bands"] - p["app_bands_min"])
+                   + 5.0 * a["border_fg"])
+        return "app_screen", _signals(feat, "ui_dense_small_text", conf,
+                                      app=dict(a, hit=None),
+                                      thresholds={"fg_max": p["app_fg_max"], "bands_min": p["app_bands_min"],
+                                                  "border_min": p["app_border_min"],
+                                                  "run_max": p["app_run_max"]})
     # 5) full_page：**底色成片**（mode_frac，与明暗无关）+ 有前景 + 有边 + 有版面 + 无大面积肤色
     if (feat["mode_frac"] >= p["fullpage_mode_min"] and feat["fg_frac"] >= p["fullpage_fg_min"]
             and feat["edge_frac"] >= p["fullpage_edge_min"] and feat["bands"] >= 1
