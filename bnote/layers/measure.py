@@ -43,9 +43,6 @@ from ..tools import probe_media
 SCHEMA = "bnote-measure/1"
 ALGO = "bnote-measure/1"
 
-APPLICABILITY_NOTE = ("未按遮罩算：本集没有 cache/<vid>/overlay.json，烧录字幕与标注工具条"
-                      "每秒在变，会污染 motion 与 freezes（先 bnote slides 抽帧产出遮罩，"
-                      "或直接跑 bnote overlay）")
 MASK_NOTE = ("已按遮罩算：给同一条 ffmpeg 滤镜链的最前面加 drawbox=...:t=fill，把遮挡区涂成"
              "常数，freezedetect / scdet 只看没被遮住的像素（**没有多解码一遍**）")
 COVERAGE_NOTE = "sampling_* 才是「抽了几帧、可能漏什么」的上界；没有 frames/index.json 时为 null"
@@ -113,7 +110,11 @@ def _drawboxes(masks, cfg, media_size, basis=None) -> list[str]:
 def _applicability(paths, masks, basis=None) -> dict:
     """适用性：按遮罩算还是全画面算、遮罩从哪来（M1 已有该字段，M3 才真正用起来）。"""
     if not masks:
-        return {"masked": False, "mask_source": None, "note": APPLICABILITY_NOTE}
+        # 提示里的路径也要按 basis 说对（取样模式应是 cache/<vid>/sample/overlay.json，0.15.1）
+        src = (basis or {}).get("relpath") or _rel(paths, paths.overlay)
+        return {"masked": False, "mask_source": None,
+                "note": "未按遮罩算：本集没有 %s，烧录字幕与标注工具条每秒在变，会污染 motion 与 "
+                        "freezes（先 bnote slides 抽帧产出遮罩，或直接跑 bnote overlay）" % src}
     src = (basis or {}).get("relpath") or _rel(paths, paths.overlay)
     return {"masked": True, "mask_source": "%s（%d 个区域）" % (src, len(masks)),
             "note": MASK_NOTE}
