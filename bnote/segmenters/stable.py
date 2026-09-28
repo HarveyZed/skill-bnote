@@ -94,25 +94,36 @@ def _overlay_spec(paths):
     """读 cache/<vid>/overlay.json：返回 (遮罩框列表, 手写笔迹判据参数或 None)。
 
     **文件就是接口**（P1）：这里不 import overlay 层，只认冻结的 regions[] 与 params。
-    三条规矩：
+    四条规矩：
       * 只有 applicability == "ok" 的区域可采信；
       * kind == "handwriting" 的区域**不进遮罩框** —— 它的 box 只是审计范围，按框整块挖会把
         其余帧同位置的正文一起挖掉；笔迹要按帧用 params 里的 handwriting_* 判据重算（M4）；
+      * kind == "transient_overlay" 的区域**不进遮罩框**，只把 evidence.frames（命中帧清单）
+        带出来 —— 它只对那几帧成立（§3.4-11）；交付期的补全由 layers/composite.py 做；
       * 读不出来（缺文件 / 结构不对）一律当"没有遮罩"处理，由调用方打印说明后退化为全画面。
+
+    返回 (遮罩框列表, 手写笔迹判据参数或 None, 临时遮挡命中帧集合)。
     """
     doc = paths.read_json(paths.overlay) or {}
     boxes = []
     hand = None
+    transient = set()
     for r in (doc.get("regions") or []):
         if r.get("applicability") != "ok":
             continue
         if r.get("kind") == "handwriting":
             hand = dict(doc.get("params") or {})
             continue
+        if r.get("kind") == "transient_overlay":
+            # 临时遮挡**按帧**生效：把命中帧清单带出来给候选层标记（**不进 boxes** ——
+            # 整块挖会伤其余帧同位置的正文）
+            for name in ((r.get("evidence") or {}).get("frames") or []):
+                transient.add(str(name))
+            continue
         box = r.get("box")
         if isinstance(box, list) and len(box) == 4:
             boxes.append(tuple(float(x) for x in box))
-    return boxes, hand
+    return boxes, hand, transient
 
 
 def _mask_cells(masks, rows, cols):
@@ -233,7 +244,7 @@ def _score_candidate(cfg, cheap_metrics, ocr_info, pos_ratio):
 
 
 def _pick_frame(cfg, paths, frames, idxs, sigs, cheap, ocr, stable_mask=None, ocr_region=None,
-               ocr_masks=None):
+               ocr_masks=None, transient_frames=None):
     """从该页的帧里挑"终态帧"。
 
     关键：动画页的完整状态出现在**稳定区间的末尾**。所以候选池只取"稳定帧"
@@ -274,6 +285,8 @@ def _pick_frame(cfg, paths, frames, idxs, sigs, cheap, ocr, stable_mask=None, oc
 
     span = max(1, len(idxs) - 1)
     base = min(idxs)
+    transient_frames = transient_frames or set()
+    pen = float((cfg.get("segment") or {}).get("transient_overlay_penalty", 0.0))
     for m in scored:
         ocr_info = (ocr.text(paths.frames / m["file"], region=ocr_region, masks=ocr_masks)
                     if ocr else {"text": "", "chars": 0, "boxes": 0})
@@ -281,6 +294,15 @@ def _pick_frame(cfg, paths, frames, idxs, sigs, cheap, ocr, stable_mask=None, oc
         m["ocr_boxes"] = ocr_info["boxes"]
         m["ocr_text"] = ocr_info["text"]
         m["score"] = _score_candidate(cfg, m, ocr_info, (m["idx"] - base) / span)
+        # §3.4-11：这一帧的角上被**临时遮挡**命中（overlay.json 的 transient_overlay 帧清单）。
+        # 默认只**标记**（penalty=0）：实测这四张交付页的净胜分**全部**来自叠加层自己的字数
+        # （p20 +6.01/16 字、p21 +5.84/6 字、p22 +21 与 +18 字），一旦扣分就会把**终态帧**换成
+        # 同页更早的候选（p22 段 9 要退回 51 s 前的 001318）—— 那正是 M4b occlusion_swap 判错
+        # 的同一类退化。被遮住的那一角改由**交付期**的同页镶嵌补回（layers/composite.py），
+        # 终态帧照旧是主图。想试扣分的人把 [segment].transient_overlay_penalty 打开。
+        m["transient_overlay"] = m["file"] in transient_frames
+        if m["transient_overlay"] and pen > 0:
+            m["score"] -= pen
     scored.sort(key=lambda m: m["score"], reverse=True)
 
     # OCR 是概率性识别：对前两名候选各跑一次，按行合并（模糊去重）得到更完整的页面文字
@@ -313,7 +335,10 @@ def _cand_doc(c: dict) -> dict:
             "role": c.get("role"), "role_evidence": c.get("role_evidence"),
             # M4b「遮挡最少」的判据数字：最大连通前景块占整幅的比例（越大=被挡得越多）。
             # 它只作**同页候选之间**的相对比较（同页背景相同），不跨页比。
-            "occlusion": c.get("occlusion")}
+            "occlusion": c.get("occlusion"),
+            # §3.4-11：这一帧的角上有没有被**临时遮挡**命中（overlay.json 的帧清单）。
+            # 无论扣分开关是否打开都写，证据可查（交付期镶嵌只看它）。
+            "transient_overlay": bool(c.get("transient_overlay"))}
 
 
 def _union_cands(dst: dict, src: dict) -> None:
@@ -440,7 +465,7 @@ def segment(cfg, paths, frames, transcript, ocr, role_fn=None, page_roles=("full
     min_seg = float(cfg["segment"]["min_seg_sec"])
 
     # M3：先看 cache/<vid>/overlay.json 说"哪些像素不是幻灯片内容"，再决定帧差/墨迹/OCR 用什么。
-    masks, strokes = _overlay_spec(paths)
+    masks, strokes, transient = _overlay_spec(paths)
     if masks:
         print("[stable] 按 overlay.json 的 %d 个遮罩区域计算帧差/墨迹/清晰度/送 OCR：%s"
               % (len(masks), "、".join("[%.3f,%.3f,%.3f,%.3f]" % m for m in masks)))
@@ -449,6 +474,12 @@ def segment(cfg, paths, frames, transcript, ocr, role_fn=None, page_roles=("full
               "重跑 bnote slides 会自动产出它")
     else:
         print("[stable] overlay.json 里没有可采信的遮挡框（只有手写笔迹判据）→ 帧差/墨迹按**全画面**算")
+    if transient:
+        pen = float((cfg.get("segment") or {}).get("transient_overlay_penalty", 0.0))
+        print("[stable] %d 帧被**临时遮挡**命中（按帧生效，不进遮罩）：%s%s"
+              % (len(transient), "、".join(sorted(transient)[:8]) + ("…" if len(transient) > 8 else ""),
+                 ("；候选层按 [segment].transient_overlay_penalty=%.3f 扣分" % pen) if pen > 0 else
+                 "；候选层只标记不扣分（[segment].transient_overlay_penalty=0，理由见 default.toml）"))
     app = None
     if strokes:
         # M4b：手写守卫 —— 整屏应用/录屏（IDE/浏览器/终端）帧整帧跳过涂白，参数与角色判据同源
@@ -518,7 +549,7 @@ def segment(cfg, paths, frames, transcript, ocr, role_fn=None, page_roles=("full
     segments = []
     for gi, idxs in enumerate(merged_idx, start=1):
         chosen, cands = _pick_frame(cfg, paths, frames, idxs, sigs, cheap, ocr, stable_mask, strip_region,
-                                     ocr_masks=masks)
+                                     ocr_masks=masks, transient_frames=transient)
         segments.append({
             "id": gi,
             "t_start": frames[idxs[0]]["t"],
