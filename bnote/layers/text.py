@@ -292,8 +292,13 @@ def assemble(cfg, paths) -> Path:
             "- 合集: %s ｜ UP: %s" % (meta.get("title") or "", meta.get("owner") or ""),
             "- 时长: %s ｜ 源: %s" % (_ts(meta.get("duration")), meta.get("url") or ""),
             "- 本稿是信息流（无幻灯片）模式的整理稿：按时间轴逐段覆盖字幕（**书面转写**，未做内容压缩）。", ""]
+    body = NL.join(parts)
+    # 前缀归一（0.15.1）：写手可能按旧契约写了 `../_meta/…` —— 那是相对 text/NN.md 的形态，
+    # 而交付稿 lecture.md 就在 out/<vid>/ 下。判据与实现都在 refs.ref_normalize（单点）：
+    # **按交付稿所在目录解析得到的引用一律不动**，只在"解析不到、去掉前缀却解析得到"时改写。
+    body = refs_layer.sub_path(body, lambda r: refs_layer.ref_normalize(paths.out, r))
     lec = paths.out / "lecture.md"
-    lec.write_text(NL.join(head) + NL + NL.join(parts) + NL, encoding="utf-8")   # 元信息块后留空行
+    lec.write_text(NL.join(head) + NL + body + NL, encoding="utf-8")   # 元信息块后留空行
     md = lec.read_text(encoding="utf-8")
     anchors = ANCHOR_RE.findall(md)
     idx = ["# %s（导航）" % (meta.get("part") or paths.vid), "",
@@ -409,9 +414,12 @@ def _coverage_errors(paras: list, found: list) -> list:
 def _ref_errors(md: str, paths) -> list:
     """信息流模式的图片引用校验——**只查"能不能定位"**。
 
-    三条：① 引用不在三类白名单内（复用 `refs.unknown_targets`，**不另写正则**）；
+    四条：① 引用不在三类白名单内（复用 `refs.unknown_targets`，**不另写正则**）；
     ② 引用的面板名在 `sheet.json` ∪ `sheet_sample.json` 的 `tiles[].sheet` 里查不到；
-    ③ 引用的插图名在 `_meta/figures.json` 的 `figures[].name` 里查不到（0.14.0，同"面板存在性"一套）。
+    ③ 引用的插图名在 `_meta/figures.json` 的 `figures[].name` 里查不到（0.14.0，同"面板存在性"一套）；
+    ④ **引用要能相对 lecture.md 自己解析到真实文件**（0.15.1 新增，`refs.ref_path_in`）——
+    名字在清单里 ≠ 图还在，前缀写错也在这里现形：P53 真产物里 `../_meta/figures/01.png` 的名字
+    在 figures.json 里、`check` 报 0 错，但它相对 lecture.md 指向 `out/_meta/…`，是一张坏图。
 
     **t 与索引的一致性不在这里重复实现**：正文里只有路径、没有时间，结构上查不了；它归
     `sheet.verify()`（对照 `doc["basis"]` 指向的索引，容差 1e-6）——同一件事只留一个真源，
@@ -442,6 +450,25 @@ def _ref_errors(md: str, paths) -> list:
             out.append({"level": "error", "owner": "text",
                         "message": "引用了插图 %s，但 _meta/figures.json 里没有它"
                                    "（跑 bnote figures 生成候选，或删掉这条引用）" % r.name})
+    # ④ 能不能定位到真实文件：按**交付稿所在目录**（out/<vid>/）解析。前缀归一（assemble）只
+    #    兜得住"旧前缀写对了位置"这一种；图被删/改名、前缀写成 `../` 都落在这里报。
+    seen_files: set = set()
+    for r in refs_layer.iter_refs(md):
+        key = (r.kind, r.prefix, r.name)
+        if key in seen_files:
+            continue
+        seen_files.add(key)
+        if refs_layer.ref_path_in(paths.out, r.kind, r.name, r.prefix).exists():
+            continue
+        rel = refs_layer.ref_relpath(r.kind, r.name)
+        out.append({"level": "error", "owner": "text", "file": "lecture.md",
+                    "fix_hint": ("引用只相对 lecture.md（out/%s/）解析：信息流讲稿用不带 `../` 的 `%s`；"
+                                 "图被删/改名就重跑 bnote figures / bnote sheet，或删掉这条引用"
+                                 % (paths.vid, rel)),
+                    "message": ("图片引用解析不到真实文件：%s —— lecture.md 在 out/%s/ 下，按它解析"
+                                "应落在 `%s`，但该文件不存在（图被删/改名，或前缀写错：信息流讲稿"
+                                "的引用不带 `../`）"
+                                % (r.prefix + rel, paths.vid, rel))})
     return out
 
 
