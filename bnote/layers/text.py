@@ -138,7 +138,8 @@ def build_chunks(cfg, paths, paragraphs: list, meta: dict) -> list:
             "## 这一块你要做什么",
             "",
             "- 只处理本块的字幕；产出写到 %s（相对工作目录；纯正文 Markdown，不写前言、不写元信息）" % (Path("text") / ("%02d.md" % i)),
-            "- 逐段覆盖、不摘要、不编造；讲师没说的不写，你的推断要标明（推断）",
+            "- **书面转写**（不是逐字转写）：删掉口语填充与重复（嗯 / 啊 / 就是说 / 这个这个 / 那个那个）、口误直接修顺",
+            "- 逐段覆盖、不摘要、不编造：不许删例子、数据、步骤与细节，不许把几段并成一句结论；讲师没说的不写，你的推断要标明（推断）",
             "- 段落锚点用下面给出的（工具已打好，不许自编时间）；可以合并相邻段落，合并时必须用【最早】那一段的锚点",
             "- 每段自己拟一个小标题，写成：## [00:12:30] 小标题",
             "- 字幕无标点、可能有 ASR 错字：按上下文补标点，按术语表校正",
@@ -274,7 +275,7 @@ def assemble(cfg, paths) -> Path:
     head = ["# %s" % (meta.get("part") or paths.vid), "",
             "- 合集: %s ｜ UP: %s" % (meta.get("title") or "", meta.get("owner") or ""),
             "- 时长: %s ｜ 源: %s" % (_ts(meta.get("duration")), meta.get("url") or ""),
-            "- 本稿是信息流（无幻灯片）模式的整理稿：按时间轴逐段覆盖字幕，未做摘要压缩。", ""]
+            "- 本稿是信息流（无幻灯片）模式的整理稿：按时间轴逐段覆盖字幕（**书面转写**，未做内容压缩）。", ""]
     lec = paths.out / "lecture.md"
     lec.write_text(NL.join(head) + NL + NL.join(parts) + NL, encoding="utf-8")   # 元信息块后留空行
     md = lec.read_text(encoding="utf-8")
@@ -346,6 +347,47 @@ def _anchor_drift_warns(cfg, paths, paras: list, md: str) -> list:
                                          % (_ts(a_sec), paras[j]["id"], _ts(paras[j]["t_start"]))})
                 break
     return warns
+
+
+def _coverage_errors(paras: list, found: list) -> list:
+    """结构判据（主闸门，0.14.0）：**工具给的每个段落都要被正文的某个小节覆盖**。
+
+    以前只验「锚点是不是工具给的段落起点」，不验「工具给的段落有没有被写到」——写手整段跳过
+    （例如直接从第 2 段起笔、把开头丢了）时锚点依然合法，字数比又只是总量旁证，漏写能一路通过。
+    判定只看结构：锚点 → 段落序号的映射，锚点 i 覆盖段落 i .. 下一个锚点-1（合并相邻段落时用
+    【最早】那段的锚点，所以合并后仍然覆盖被合并的每一段）。
+    """
+    pos = {_ts(p["t_start"]): i for i, p in enumerate(paras)}
+    seq = [pos[_ts(_sec(t))] for t, _ in found if _ts(_sec(t)) in pos]
+    out: list = []
+    if not seq:
+        out.append({"level": "error", "owner": "text",
+                    "message": "正文里没有任何段落锚点（## [HH:MM:SS] 小标题）——工具给了 %d 段字幕，"
+                               "每段都要被覆盖一次" % len(paras)})
+        return out
+    dup = [i + 1 for i in sorted(set(seq)) if seq.count(i) > 1]
+    if dup:
+        out.append({"level": "error", "owner": "text",
+                    "message": "有小节重复用了同一段落锚点（段落 %s）——每个段落只该被覆盖一次"
+                               % ", ".join(str(i) for i in dup)})
+    covered = set()
+    for k, i in enumerate(seq):
+        j = seq[k + 1] if k + 1 < len(seq) else len(paras)
+        covered.update(range(i, max(i + 1, j)))
+    missing = [i + 1 for i in sorted(set(range(len(paras))) - covered)]
+    if missing:
+        if missing == list(range(1, len(missing) + 1)):
+            out.append({"level": "error", "owner": "text",
+                        "message": "正文没覆盖开头的 %d 段字幕（段落 %d-%d）：第一个锚点是 %s，"
+                                   "段落 1 的起点是 %s —— 结构判据要求每个段落都被覆盖一次"
+                                   % (len(missing), missing[0], missing[-1],
+                                      _ts(_sec(found[0][0])), _ts(paras[0]["t_start"]))})
+        else:
+            out.append({"level": "error", "owner": "text",
+                        "message": "有 %d 段字幕没有被任何小节覆盖（段落 %s）——结构判据要求每个段落"
+                                   "都被覆盖一次（合并相邻段落时用【最早】那段的锚点）"
+                                   % (len(missing), ", ".join(str(i) for i in missing[:5]))})
+    return out
 
 
 def _ref_errors(md: str, paths) -> list:
@@ -427,14 +469,19 @@ def validate(cfg, paths) -> tuple:
         secs = [_sec(t) for t, _ in found]
         if secs != sorted(secs):
             errors.append({"level": "error", "owner": "text", "message": "段落锚点不是单调递增"})
-        ratio = float(cfg.get("text", {}).get("min_cover_ratio", 0.98))
+        errors += _coverage_errors(paras, found)   # 主闸门（0.14.0）：每段字幕都要被某个小节覆盖
+        # 字数比：**旁证**（0.14.0 起只警告、不拦）。0.85 是按「准逐字」风格标定的（12 集实测 0.913~1.197），
+        # 改成书面转写后正文本来就会变短，拿它当闸门会把合法产物判错；硬线改由上面的结构判据持有。
+        ratio = float(cfg.get("text", {}).get("min_cover_ratio", 0.70))
         # 分母用字幕**正文**（不含 transcript.md 里的时间戳，否则会把基准抬高）
         src = sum(p["chars"] for p in paras)
         # 分子只算**正文**：元信息块（标题/时长/源那条）有 200 来字，算进去会让超短集永远达标（实测 P11 因此漏检）
         got = _chars(NL.join(b for _, b in _sections(md)))
         if src and got < src * ratio:
-            errors.append({"level": "error", "owner": "text",
-                           "message": "正文 %d 字 < 字幕正文 %d 字 × %.2f —— 像是做了摘要压缩（元信息块不计入）" % (got, src, ratio)})
+            warns.append({"level": "warning", "owner": "text",
+                          "message": "正文 %d 字 < 字幕正文 %d 字 × %.2f（字数比是旁证：书面转写会让正文变短，"
+                                     "只要结构判据通过就只提醒；若同时报「段落没被覆盖」，那才是漏写）"
+                                     % (got, src, ratio)})
         meta_p = paths.meta
         if meta_p.exists():
             dur = float(json.loads(meta_p.read_text(encoding="utf-8")).get("duration") or 0)

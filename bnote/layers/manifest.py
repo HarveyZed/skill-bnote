@@ -43,6 +43,8 @@ META_BEGIN = "<!-- meta:begin -->"
 META_END = "<!-- meta:end -->"
 # 就地标注：给"读者需要看到的推断与存疑"用的固定标记（引用块，紧跟相关段落之后，不打断阅读）
 ANNOT_MARK = "**【校对】**"
+# 引用块内的列表项行（0.14.0 起【校对】块内每条一行）
+ANNOT_ITEM_RE = re.compile(r"^>\s*[-*+]\s+\S")
 # 图引用白名单不在这里定义：唯一入口是 layers/refs.py（manifest / body / merge / remap 同源）
 
 
@@ -167,6 +169,30 @@ def _reader_flags(ch: dict) -> tuple[int, int]:
     ctx = sum(1 for c in cs if str(c.get("basis") or "").lower() == "context")
     doubts = len(ch.get("uncertainties") or [])
     return ctx + doubts, ctx
+
+
+def annot_count(text: str) -> int:
+    """正文里【校对】的**条数**（0.14.0）——按**块内条数**计，不按标记数计。
+
+    0.14.0 起【校对】块内**每条一行、用列表**，一个块可以含多条；仍按 `**【校对】**` 出现次数计
+    会永远小于 manifest 里要读者看到的条数（一个块里 3 条只数出 1）→ 幻灯片模式假 error。
+    口径（与 references/schema/body-contract.md 一致）：
+      * 连续的 `>` 行合为一个块（空行或非引用行断开）；
+      * 只有含 ANNOT_MARK 的块才计数；
+      * 块内有列表项就数列表项行数；没有列表项的**旧式单行块按 1 条计**（向后兼容旧稿）。
+    """
+    total, block = 0, []
+    for line in list((text or "").splitlines()) + [""]:
+        s = line.lstrip()
+        if s.startswith(">"):
+            block.append(s)
+            continue
+        if block:
+            if any(ANNOT_MARK in b for b in block):
+                items = sum(1 for b in block if ANNOT_ITEM_RE.match(b))
+                total += items or 1
+            block = []
+    return total
 
 
 def _err(msg: str, owner: str = "manifest", chapter: str | None = None,
@@ -456,13 +482,13 @@ def validate(manifest: dict | None, paths, meta: dict, transcript: dict | None,
                                            fix="跑 bnote sheet 生成面板（行列→帧→t 的映射只在 sheet.json），"
                                                "或删掉这条引用"))
             need, ctx = _reader_flags(ch)
-            have = text.count(ANNOT_MARK)
+            have = annot_count(text)   # 按块内条数（0.14.0 起块内可列表化，见 annot_count）
             if need > have:
                 errors.append(_err(
-                    "需要读者看到的推断/存疑有 %d 条（其中推断类校正 %d 条），正文里只有 %d 处就地标注"
+                    "需要读者看到的推断/存疑有 %d 条（其中推断类校正 %d 条），正文里只有 %d 条就地标注（按块内条数计）"
                     % (need, ctx, have), "chapter:%s" % cid, cid, str(ch.get("body")),
-                    fix="该章写作 agent 在涉及段落之后补引用块 %s：写明原文 → 更正（或存疑点）→ 依据；"
-                        "不要写进句子中间，也不要打断正文阅读" % ANNOT_MARK))
+                    fix="该章写作 agent 在涉及段落之后补引用块 %s：块内**每条一行**（\u0060> - 原文 → 更正"
+                        "（或存疑点）→ 依据\u0060）；不要写进句子中间，也不要打断正文阅读" % ANNOT_MARK))
 
         kps = ch.get("keypoints") or []
         if len(kps) < kp_min:
