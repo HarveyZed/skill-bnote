@@ -1,6 +1,6 @@
 [project]
 name = "bnote"
-version = "0.11.0"
+version = "0.12.0"
 description = "Bilibili video -> slide-segmented Markdown lecture notes pipeline"
 readme = "README.md"
 license = "MIT"
