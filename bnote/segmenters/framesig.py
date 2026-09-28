@@ -105,6 +105,162 @@ INK_BG_BINS = 51                 # 背景水平直方图桶数（宽 0.02）
 INK_BG_SMOOTH = 3                # 找峰时的平滑窗（桶）
 INK_OTSU_BINS = 64               # OTSU 直方图桶数（宽 1/64）
 
+# 「临时遮挡（叠加层）」判据的**唯一真源**：默认值在这里，[overlay] 段可覆盖（BN_OVERLAY_TRANSIENT_*）。
+# 消费方：bnote/layers/overlay.py（认区域，落进 overlay.json 的 kind="transient_overlay"）
+# 与 layers/composite.py（按帧做同页无遮挡镶嵌）。判据**按瞬态性**判，不按种类 ——
+# 水印 / 常驻画中画只有在"闪现"时才被处理（见 transient_max_ratio 那条门槛）。
+#
+# 两段式（成本差两个数量级，所以便宜那段对每帧跑、贵那段只对候选帧跑）：
+#   **一筛（搭在 overlay.scan 已有的逐帧解码上，增量≈0）**，每帧每角三个数：
+#     resid       角窗对**时域中位**（±transient_window 帧的中位）的平均绝对残差；
+#     frame_resid 同一中位的**整帧**平均绝对残差 —— 换页 / 转场帧在这里被两条守卫挡掉：
+#                 绝对值上限 transient_frame_resid_max，或"角窗残差 >= 整帧残差的 N 倍"
+#                 （叠加层只占 9% 面积却贡献大部分残差，所以"局部性"本身就是一条判据）。
+#     edge        角窗（96x54 尺度）的梯度密度（**纹理守卫**：空白角 / 平滑照片不算叠加层）。
+#   **二筛（只对一筛候选帧回近似全分辨率复核）**：
+#     color       角窗里"显著色块色调档数"（饱和 > 0.35 且亮度 > 0.35 的像素按 30 度分 12 档，
+#                 每档像素数达 transient_color_frac × 角窗面积才算一档）。
+#   为什么二筛必须回到 ~480 宽：标注工具条底部那排 10 格色板在 320 宽被双线性插值糊成一团，
+#   同一个工具条只数得出 3 档（480 宽 7~10 档、全分辨率 7~10 档）；而假例（幻灯片上的文字框 /
+#   逐条动画元素、片头）在任何尺度都只有 0~2 档。
+#
+# 实测分离度（p20/p21/p22 的 22 个已知工具条帧 vs 一筛多出的假例，尺度 480）：
+#   真例 color 7~10；假例 0~2 → 门槛 6（沿用历史值）两边都留了余量。
+# 全集结果（p20/p21/p22 + P48–P53 共 9 集 17946 帧，脚本 vision-probe/_t04_c5.py）：
+#   一筛给出 p20 3 / p21 13 / p22 13 / P48–P53 0~46 个候选；二筛后 p20=3、p21=8、p22=11
+#   （与逐帧目视过的真值**逐个相同**），P48–P53 只剩 p51 的 7 帧 —— 那 7 帧逐帧目视确认是
+#   Windows 桌面上的右键菜单（真叠加层，不是误报），且都不是 chosen，不影响交付。
+TRANSIENT_DEFAULTS = {
+    "transient_enabled": True,
+    "transient_zone": 0.30,              # 四角搜索窗边长（占画面宽/高）—— 实测角窗，先当可配参数
+    "transient_window": 10,              # 时域中位窗半径（帧）：21 帧 = 10.5 s @2fps
+    "transient_resid_min": 0.02,         # 角窗残差下限（真例 0.031~0.164；随机帧 p99 <= 0.013）
+    "transient_frame_resid_max": 0.02,   # 整帧残差上限（换页 / 整屏变化的帧挡在这里）
+    "transient_frame_share_min": 2.0,    # 或：角窗残差 >= 这个倍数 × 整帧残差（局部性守卫）
+    "transient_edge_min": 0.03,          # 角窗梯度密度下限（纹理守卫，96x54 尺度）
+    "transient_color_min": 6,            # 显著色块色调档数下限（二筛，480 宽尺度）
+    "transient_color_width": 480,        # 二筛的分析宽度
+    "transient_color_frac": 0.0015,      # 每档色调要占角窗这么多面积才算一档
+    "transient_max_ratio": 0.2,          # **瞬态门槛**：出现帧占比 <= 它才处理；超过 = 常驻 -> 不动
+    "transient_min_frames": 1,           # 至少这么多帧命中才产出一条区域
+    "transient_ref_stride": 8,           # 常驻检测的参考帧步长（跨页不变量）
+    "transient_ref_min": 128,            # 参考帧数下限（帧多时自动放大步长，保住这个数）
+    "transient_same_eps": 0.02,          # 角窗"与另一帧逐像素一致"的判定（48x27 尺度平均绝对差）
+    "transient_page_min": 0.02,          # 整帧"是另一页"的距离下限
+    "transient_votes_min": 3,            # 至少这么多"另一页"的参考帧在同一角窗与它一致
+    "transient_min_gap": 40,             # 参考帧至少要隔这么多帧（同页邻帧不算数）
+    "transient_res_edge_min": 0.05,      # 常驻候选的纹理下限（只判常驻，不产区域）
+}
+
+TRANSIENT_CORNERS = ("top-left", "top-right", "bottom-left", "bottom-right")
+
+# 判据的分析尺度：**固定** 48x27 与 96x54（按宽度等比缩高会让同一份标定数字在不同长宽比的
+# 集上漂移）。48x27 这一份就是 signature() 已经在算的 legacy 剖面，scan 直接存下来即可。
+TRANSIENT_SMALL = (48, 27)
+TRANSIENT_TEX = (96, 54)
+
+
+def transient_params(raw: dict | None) -> dict:
+    """从 [overlay] 配置（或 overlay.json 的 params）里取临时遮挡判据参数；缺项用默认值。"""
+    src = raw or {}
+    out = {}
+    for k, v in TRANSIENT_DEFAULTS.items():
+        if isinstance(v, bool):
+            out[k] = bool(src.get(k, v))
+        elif isinstance(v, int):
+            out[k] = int(src.get(k, v))
+        else:
+            out[k] = float(src.get(k, v))
+    return out
+
+
+def corner_zones(zone: float):
+    """四个角的相对坐标搜索窗（与 overlay.rel_zones 同一口径，名字也一致）。"""
+    z = float(zone)
+    return [("top-left", (0.0, 0.0, z, z)), ("top-right", (1.0 - z, 0.0, 1.0, z)),
+            ("bottom-left", (0.0, 1.0 - z, z, 1.0)),
+            ("bottom-right", (1.0 - z, 1.0 - z, 1.0, 1.0))]
+
+
+def corner_rect(h: int, w: int, corner: str, zone: float):
+    """角窗的像素范围 (y0, y1, x0, x1) —— **唯一的角窗几何**，剖面与 RGB 两条路径共用。
+
+    RGB 数组的最后两维是 (H, W, 3)，与剖面 (..., H, W) 不同，所以几何单独抽一份出来：
+    一旦有人把 corner_crop 直接用在 RGB 上（末两维会被当成 H/W），几何就错了 —— 这正是
+    本函数存在的理由（实测吃到过：色板档数恒为 0）。
+    """
+    zh = max(1, int(round(float(zone) * h)))
+    zw = max(1, int(round(float(zone) * w)))
+    if corner == "top-left":
+        return 0, zh, 0, zw
+    if corner == "top-right":
+        return 0, zh, w - zw, w
+    if corner == "bottom-left":
+        return h - zh, h, 0, zw
+    return h - zh, h, w - zw, w
+
+
+def corner_crop(arr: np.ndarray, corner: str, zone: float) -> np.ndarray:
+    """从 (..., H, W) 数组里取角窗（H/W = **末两维**）—— 只用于灰度剖面堆叠，不要用于 RGB。"""
+    y0, y1, x0, x1 = corner_rect(arr.shape[-2], arr.shape[-1], corner, zone)
+    return arr[..., y0:y1, x0:x1]
+
+
+def edge_density(arr: np.ndarray, eps: float = 0.08) -> np.ndarray:
+    """梯度密度（"有细小字符/边"的占比）：(..., H, W) 灰度 -> (...) 每帧一个数。"""
+    a = np.asarray(arr, dtype=np.float32)
+    gx = np.abs(np.diff(a, axis=-1)) > eps
+    gy = np.abs(np.diff(a, axis=-2)) > eps
+    e = np.zeros(a.shape[:-2] + a.shape[-2:], dtype=bool)
+    e[..., :, :-1] |= gx
+    e[..., :-1, :] |= gy
+    return e.mean(axis=(-2, -1))
+
+
+def color_patch_bins(rgb: np.ndarray, need_frac: float = 0.0015, sat_min: float = 0.35,
+                     val_min: float = 0.35, bins: int = 12, need_min: int = 20) -> int:
+    """显著色块色调档数：饱和 + 够亮的像素按 30 度分 12 档，每档像素数达标才计一档。
+
+    判据是"**有彩色色板**"（标注工具条的笔色 / 荧光笔色 / 一排色板），不是"画面里有颜色"：
+    幻灯片上的彩色图块通常只落 1~2 档，工具条落 7~10 档（实测见 TRANSIENT_DEFAULTS）。
+    分析尺度必须 ~480 宽，再小就把一排色板糊成一团。
+    """
+    a = np.asarray(rgb, dtype=np.float32)
+    mx = a.max(axis=-1)
+    mn = a.min(axis=-1)
+    sat = np.where(mx > 1e-6, (mx - mn) / np.maximum(mx, 1e-6), 0.0)
+    m = (sat > sat_min) & (mx > val_min)
+    if not m.any():
+        return 0
+    d = np.maximum(mx - mn, 1e-6)
+    r, g, b = a[..., 0], a[..., 1], a[..., 2]
+    hue = np.where(mx == r, ((g - b) / d) % 6.0,
+                   np.where(mx == g, (b - r) / d + 2.0, (r - g) / d + 4.0)) * 60.0
+    idx = np.clip((hue / (360.0 / bins)).astype(np.int32), 0, bins - 1)[m]
+    cnt = np.bincount(idx, minlength=bins)
+    return int((cnt >= max(int(need_min), int(need_frac * m.size))).sum())
+
+
+def temporal_median(arr: np.ndarray, window: int) -> np.ndarray:
+    """逐帧的**时域中位**（两侧各 window 帧；端点用边缘复制）。
+
+    为什么用中位而不是均值：瞬态遮挡在整集里只占极少数帧，中位把它们整个吃掉 ——
+    "这一帧的角" vs "同一位置的常态" 的差就正好是遮挡物。均值会被遮挡帧自己污染。
+    """
+    w = max(0, int(window))
+    a = np.asarray(arr, dtype=np.float32)
+    if w == 0 or a.shape[0] < 2:
+        return a.copy()
+    pad = np.concatenate([np.repeat(a[:1], w, axis=0), a, np.repeat(a[-1:], w, axis=0)], axis=0)
+    n = a.shape[0]
+    out = np.empty_like(a)
+    chunk = 256
+    for s in range(0, n, chunk):
+        e = min(n, s + chunk)
+        win = np.lib.stride_tricks.sliding_window_view(pad[s:e + 2 * w], 2 * w + 1, axis=0)
+        out[s:e] = np.median(win, axis=-1)
+    return out
+
 
 def app_params(raw: dict | None) -> dict:
     """从 [roles] 配置（或任意字典）里取"整屏应用"判据参数；缺项用默认值。"""
@@ -420,3 +576,115 @@ def frame_diff(a, b, alpha: float) -> float:
     ham = hamming(a[1], b[1]) / 64.0
     pix = float(np.abs(a[0] - b[0]).mean())
     return alpha * ham + (1.0 - alpha) * pix
+
+
+def _pair_rms(x: np.ndarray, y: np.ndarray) -> np.ndarray:
+    """两组行向量两两之间的**逐元素均方根距离**（(n, d) x (m, d) -> (n, m)）。
+
+    用 ||x-y||^2 = ||x||^2 + ||y||^2 - 2<x,y> 一次矩阵乘算完。内存 = n x m x 8 B
+    （调用方用步长把 m 压在 ~512 以内）。
+    """
+    x = np.asarray(x, dtype=np.float64)
+    y = np.asarray(y, dtype=np.float64)
+    x2 = np.einsum("ij,ij->i", x, x)[:, None]
+    y2 = np.einsum("ij,ij->i", y, y)[None, :]
+    d2 = x2 + y2 - 2.0 * (x @ y.T)
+    return np.sqrt(np.maximum(d2, 0.0) / max(1, x.shape[1]))
+
+
+def transient_overlay_corners(small: np.ndarray, big: np.ndarray, p: dict, rgb_corner=None) -> list:
+    """临时遮挡：一筛（每帧每角三个数）+ 二筛（只对候选帧）+ 瞬态门槛，**不产区域、不落盘**。
+
+    small: (n, 27, 48) 灰度 float32 0..1 —— 就是 signature() 已经在算的 legacy 剖面
+           （scan 把它逐帧存下来，不再多解一次码）
+    big:   (n, 54, 96) 灰度 float32 0..1 —— 纹理守卫用
+    rgb_corner(i, corner) -> (H, W, 3) float32 0..1（宽 = transient_color_width）：二筛用；
+           传 None = **跳过二筛**（只剩一筛证据，调用方必须在产物里写清楚）
+
+    返回每个角一条记录（verdict = transient / resident / clear），数字都能复算：
+      candidates 一筛候选帧号；hits 二筛后的命中帧号；hit_ratio = len(hits)/n；
+      votes_max / resident_ratio 是**常驻检测**（跨页不变量 + 纹理）的两个数，只用来给
+      "常驻者不动"那句日志和证据，**不进瞬态门槛** —— 工具条所在的那个角在某些集上同时也有
+      很高的跨页不变量（标题栏 / 水印），拿它当门槛就会把工具条一起挡掉。
+    """
+    a = np.asarray(small, dtype=np.float32)
+    b = np.asarray(big, dtype=np.float32)
+    n = int(a.shape[0])
+    zone = float(p["transient_zone"])
+    zones = corner_zones(zone)
+    if n < 2:
+        return [{"corner": c, "box": [round(x, 4) for x in bx], "candidates": [], "hits": [],
+                 "hit_ratio": 0.0, "verdict": "clear", "reason": "帧数 %d < 2，判据不成立" % n,
+                 "resid_hits": [], "edge_hits": [], "color_hits": [], "votes_max": 0,
+                 "resident_ratio": 0.0, "frame_resid_max": 0.0, "resid_max_candidate": 0.0}
+                for c, bx in zones]
+    med = temporal_median(a, int(p["transient_window"]))
+    frame_resid = np.abs(a - med).mean(axis=(1, 2))
+    # 常驻检测（跨页不变量）：参考帧按步长抽，帧多时自动放大步长，把距离矩阵压在 ~512 列以内
+    stride = max(1, int(p["transient_ref_stride"]))
+    if n // stride > 512:
+        stride = int(np.ceil(n / 512.0))
+    elif n // stride < int(p["transient_ref_min"]) and n >= int(p["transient_ref_min"]):
+        stride = max(1, n // int(p["transient_ref_min"]))
+    ref = np.arange(0, n, stride)
+    flat = a.reshape(n, -1)
+    full_d = _pair_rms(flat, flat[ref])
+    gap = np.abs(np.arange(n)[:, None] - ref[None, :])
+    # "隔得够远的另一帧"：帧数少的取样包（~90 帧）也要有参考帧，所以 min_gap 夹到 n//4
+    gap_min = min(int(p["transient_min_gap"]), max(1, n // 4))
+    crosspage = (full_d >= float(p["transient_page_min"])) & (gap >= gap_min)
+    out = []
+    for corner, box in zones:
+        cs = corner_crop(a, corner, zone)
+        resid = np.abs(cs - corner_crop(med, corner, zone)).mean(axis=(1, 2))
+        tex = edge_density(corner_crop(b, corner, zone))
+        local = resid >= float(p["transient_resid_min"])
+        page = ((frame_resid <= float(p["transient_frame_resid_max"]))
+                | (resid >= float(p["transient_frame_share_min"]) * frame_resid))
+        cand = np.flatnonzero(local & page & (tex >= float(p["transient_edge_min"])))
+        cflat = cs.reshape(n, -1)
+        votes = ((_pair_rms(cflat, cflat[ref]) <= float(p["transient_same_eps"])) & crosspage).sum(axis=1)
+        resident_ratio = float(((votes >= int(p["transient_votes_min"]))
+                                & (tex >= float(p["transient_res_edge_min"]))).mean())
+        hits, cols = [], {}
+        for i in cand:
+            i = int(i)
+            if rgb_corner is None:
+                hits.append(i)
+                continue
+            col = color_patch_bins(rgb_corner(i, corner),
+                                   need_frac=float(p["transient_color_frac"]))
+            cols[i] = col
+            if col >= int(p["transient_color_min"]):
+                hits.append(i)
+        ratio = len(hits) / float(n)
+        maxr = float(p["transient_max_ratio"])
+        if len(hits) >= int(p["transient_min_frames"]) and ratio <= maxr:
+            verdict = "transient"
+            reason = ("角窗对时域中位的残差 >= %.3f 的帧占 %.2f%%（<= %.0f%%），且色块色调档数 >= %d"
+                      " → 临时遮挡（框内取同页干净帧补回）"
+                      % (float(p["transient_resid_min"]), 100 * ratio, 100 * maxr,
+                         int(p["transient_color_min"])))
+        elif ratio > maxr:
+            verdict = "resident"
+            reason = "出现率 %.1f%% > 阈值 %.0f%% → 按常驻处理，不动" % (100 * ratio, 100 * maxr)
+        elif resident_ratio > maxr:
+            verdict = "resident"
+            reason = ("常驻判据（跨页不变量 + 纹理）的帧占 %.1f%% > 阈值 %.0f%%"
+                      " → 按常驻处理，不动" % (100 * resident_ratio, 100 * maxr))
+        else:
+            verdict = "clear"
+            reason = "没有同时满足「瞬态残差 + 纹理守卫 + 色板档数」的帧"
+        out.append({
+            "corner": corner, "box": [round(x, 4) for x in box],
+            "candidates": [int(x) for x in cand], "hits": hits, "hit_ratio": round(ratio, 5),
+            "resid_hits": [round(float(resid[i]), 4) for i in hits],
+            "edge_hits": [round(float(tex[i]), 4) for i in hits],
+            "color_hits": [int(cols.get(i, -1)) for i in hits],
+            "resid_max_candidate": round(float(resid[cand].max()), 4) if cand.size else 0.0,
+            "frame_resid_max": round(float(frame_resid.max()), 4),
+            "votes_max": int(votes.max()) if n else 0,
+            "resident_ratio": round(resident_ratio, 4),
+            "verdict": verdict, "reason": reason,
+        })
+    return out
