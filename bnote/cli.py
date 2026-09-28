@@ -41,6 +41,7 @@ from .layers import bundle as bundle_layer
 from .layers import frames as frames_layer
 from .layers import measure as measure_layer
 from .layers import sample as sample_layer
+from .layers import triage as triage_layer
 from .layers import media as media_layer
 from .layers import merge as merge_layer
 from .layers import glossary as glossary_layer
@@ -263,10 +264,22 @@ def cmd_stream(args):
     return 0
 
 
+def _t1_hint(meta: dict, cfg: dict):
+    """T1 一行提示 → **stderr**。
+
+    stdout 必须一字不变：bnote meta 的 stdout 以一段 json.dumps 收尾，任何"把 stdout 当 JSON 读"
+    的用法都会被追加的行破坏（复核 2026-09-28 硬要求）。
+    """
+    line = triage_layer.t1_line(meta or {}, cfg)
+    if line:
+        print(line, file=sys.stderr)
+
+
 def cmd_fetch(args):
     cfg, paths, vid = _ctx(args)
     _banner(paths, cfg, vid)
-    _stage_fetch(cfg, paths, args)
+    meta, _media, _transcript = _stage_fetch(cfg, paths, args)
+    _t1_hint(meta, cfg)
     return 0
 
 
@@ -282,6 +295,7 @@ def cmd_meta(args):
     _banner(paths, cfg, vid)
     cookie, _ = auth_layer.resolve(cfg)
     meta = meta_layer.get_or_fetch(cfg, paths, cookie, refresh=args.force)
+    _t1_hint(meta, cfg)          # 走 stderr；下面那行 JSON 仍是 stdout 的最后一块
     print(json.dumps({k: meta.get(k) for k in ("bvid", "part", "cid", "duration", "page_count")},
                      ensure_ascii=False, indent=2))
     return 0
@@ -600,6 +614,30 @@ def cmd_measure(args):
     return 0
 
 
+def cmd_triage(args):
+    """M5 判型：给"该走 slides 还是 stream"的建议 + 证据 → out/<vid>/_meta/mode_hint.json。
+
+    T1 永远跑（只读元信息）；--level t2 加取样量测（**只读已有产物**，绝不解码整片）；
+    --level t3 先产出取样面板（sheet --basis sample），**面板落盘之后**才写 mode_hint ——
+    这样 evidence.t3_panel 不会指向不存在的文件（复核 watch 1）。
+    """
+    cfg, paths, vid = _ctx(args)
+    level = args.level or str((cfg.get("triage") or {}).get("default_level") or "t1")
+    sheet_doc = None
+    if level == "t3":
+        try:
+            basis = resolve_basis(paths, "sample")
+        except SystemExit as exc:
+            print("[triage] %s" % exc)          # 取样包缺失：T3 记 insufficient，不报错退出
+            basis = None
+        if basis:
+            sheet_layer.run(cfg, paths, basis=basis,
+                            want=int((cfg.get("triage") or {}).get("t3_tiles") or 12))
+            sheet_doc = paths.read_json(paths.meta_dir() / sheet_layer.SHEET_JSON_SAMPLE_NAME, None)
+    triage_layer.run(cfg, paths, level=level, force=args.force, sheet_doc=sheet_doc)
+    return 0
+
+
 def cmd_sample(args):
     """M5 取样包：只下几个短窗口（默认片头/中段/片尾各 [sample].window_sec）→ 取样帧 + 索引。
 
@@ -749,6 +787,12 @@ def build_parser():
     sp.add_argument("--basis", choices=["full", "sample"], default="full",
                     help="full（默认）= 整片媒体；sample = 取样媒体 → cache/<vid>/sample/measure.json")
     sp.set_defaults(func=cmd_measure)
+
+    sp = sub.add_parser("triage", help="M5 判型：建议 slides / stream + 证据 → out/<vid>/_meta/mode_hint.json（只建议，不自动改行为）")
+    common(sp)
+    sp.add_argument("--level", choices=["t1", "t2", "t3"], default=None,
+                    help="跑到哪一级证据（默认取 [triage].default_level；t2/t3 只在你显式要求时跑）")
+    sp.set_defaults(func=cmd_triage)
 
     sp = sub.add_parser("sample", help="M5 取样包：片头/中段/片尾各下一小段 → cache/<vid>/sample/（判型与信息流旁证用）")
     common(sp)

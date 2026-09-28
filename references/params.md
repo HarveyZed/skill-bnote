@@ -217,6 +217,15 @@
 | tools | ffprobe | `''` |
 | tools | python | `'python3'` |
 | tools | yt_dlp | `''` |
+| triage | cuts_per_min_high | `3.0` |
+| triage | cuts_per_min_low | `0.5` |
+| triage | default_level | `'t1'` |
+| triage | enabled | `True` |
+| triage | freeze_ratio_page | `0.6` |
+| triage | motion_mean_high | `0.05` |
+| triage | slides_keywords | `['课件', '幻灯片', 'PPT', '讲义', '白板']` |
+| triage | stream_keywords | `['访谈', '播客', '口播', '直播', '聊天', '实录', '课堂', '滚动']` |
+| triage | t3_tiles | `12` |
 
 ## config/default.toml 原文
 
@@ -580,6 +589,21 @@ min_cover_ratio  = 0.85     # 整理稿**正文** / 字幕正文 的下限（防
 anchor_drift_min_chars = 12   # 首句与更早段落的最短重合字数，低于此不提示
 anchor_drift_head_chars = 40  # 只在小节首句的前 N 个字里找重合
 anchor_drift_window = 3       # 往前回看多少个段落
+
+[triage]
+# M5 判型（bnote triage）：开跑前给"该走 slides 还是 stream"的建议 + 证据。
+# 产物 out/<vid>/_meta/mode_hint.json（不放时间戳）。**只建议、不自动改行为**。
+# T1 元信息永远跑（只打印一行到 **stderr**，不动任何命令的 stdout）；T2/T3 只在你显式 --level 时跑。
+enabled            = true   # T1 那一行提示是否打印（false = 连那行也不打；bnote triage 本身不受拦）
+default_level      = "t1"   # bnote triage 不带 --level 时跑到哪级
+t3_tiles           = 12     # T3 取样面板的格数（相当于 bnote sheet --max）
+# 下面四个是"形态分"的阈值 —— 判型只建议、不做硬阈值自动切换，所以它们只影响建议与置信
+cuts_per_min_high  = 3.0    # 切点密度 ≥ 该值 → 像"离散翻页"（页式特征）
+cuts_per_min_low   = 0.5    # 切点密度 ≤ 该值 → 像"几乎无硬切"（滚动/口播/实录）
+freeze_ratio_page  = 0.60   # 冻结占比 ≥ 该值 → 大段静止（页式特征）
+motion_mean_high   = 0.05   # 逐秒运动均值 ≥ 该值 → 画面持续在动（连续型特征）
+slides_keywords    = ["课件", "幻灯片", "PPT", "讲义", "白板"]
+stream_keywords    = ["访谈", "播客", "口播", "直播", "聊天", "实录", "课堂", "滚动"]
 
 [export]
 # bnote export --format bili-note：把讲义/笔记导出成"可直接粘贴进 B 站笔记"的富文本（CF_HTML）。
