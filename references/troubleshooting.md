@@ -11,6 +11,7 @@
 | 命令报「该数据根下没有 <vid> 的取数结果」 | cwd 不对：加 `BNOTE_ROOT=<数据根>`，或看命令开头那行 `[paths]` |
 | 字幕只覆盖片头（整理稿异常短） | 官方轨可能是**残轨**（实测某播客集只有 63 秒片头歌词，占片长 0.7%），工具会报「疑似残轨」并在 `transcript.json` 里标 `partial`+`coverage`；换后端（`--subtitle-backends whisper`）或确认登录态。阈值 `BN_SUBTITLE_MIN_COVERAGE`（默认 0.8）。重跑时若发现**缓存**是残轨会自动重试一次；覆盖度达标的缓存不会重复请求上游 |
 | 字幕后端全部失败 | 三条路选一条并说明理由：`auth login`（扫码）／`--subtitle-backends file` + 自带 srt／`pip install -e ".[asr]"` 后 `--subtitle-backends whisper` |
+| 多段 `--sections`（逗号或重复参数）**只下到第一段** | yt-dlp 上不可靠：本机实测两种写法都只打印 `Downloading N time ranges`、**产物只有第一段**（5 s 而非 10 s，两份产物字节相同）。要在本地切多段就改成"每窗单独下载 + `ffmpeg -f concat -c copy`"（`bnote sample` 就是这么做的）。另：多段切分对 ffmpeg 二进制敏感，**静态 imageio ffmpeg 会段错误（exit -11）**，系统 ffmpeg 正常；本机 `find_ffmpeg()` 解析到 `/usr/bin/ffmpeg`，所以 bnote 自身的单窗取样路径不受影响 |
 | `--sections` 报 `ffmpeg is not installed` 或 ffmpeg 段错误(139) | 环境里没有可用的 ffmpeg：装系统版（Linux `apt install ffmpeg`／macOS `brew install ffmpeg`）并在 `[tools] ffmpeg` 指路，或先跑整集（整集下载/抽帧用静态包也能跑）。静态包的域名解析缺陷与实测见 `references/dsh-notes.md` |
 | 页数偏多（动画被切成多页） | 调大 `BN_SEGMENT_STABLE_MIN_SEC`（1.5→2.0/2.5）后 `run --force` |
 | 页数偏少（漏页） | 调小 `BN_SEGMENT_DIFF_THRESHOLD`（0.035→0.02） |

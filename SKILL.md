@@ -146,15 +146,29 @@ overlay    M3 遮挡区识别：从**已抽出的帧**里认出"不是幻灯片�
            M4b 两道收紧：判据按**厚度**区分笔画与实心色块（红底白字条上的字不再被吃掉）、亮度下限
            收到 0.80（桌面壁纸/网页深色区/IDE 主题里的彩色图标不算笔迹）；并且**整屏应用帧
            （app_screen）整帧跳过手写判定与涂白**（那里没有手写））
+           M5 起接受 @@--basis full|sample@@：sample 时读**取样帧与取样包索引**、落 cache/<vid>/sample/overlay.json，
+           source.basis 写取样包 relpath；**整片模式的取值与产物一字不变**（不要 --basis 就与 0.12.0 相同）
 measure    零 token 媒体验测：**一次解码**量出逐秒运动 + 切点/冻结段/静音段 → cache/<vid>/measure.json
            （只读媒体文件，另可选读 cache/frames/index.json 给"抽了几帧、可能漏什么"的上界；
            进度/帧数/最大间隔都写进产物的 coverage；**M3 起按遮罩算**：有 overlay.json 就给同一条
            滤镜链加 drawbox=...:t=fill 把遮挡区涂掉（不额外解码），applicability 写 masked=true +
-           mask_source；没有就按全画面算并写 masked=false。**不接进 run/slides**，只在显式调用时跑）
-sheet      M2 读字面板：把若干帧拼成一张**只烧序号**的索引图 → out/<vid>/_meta/sheets/*.png + _meta/sheet.json
+           mask_source；没有就按全画面算并写 masked=false。**不接进 run/slides**，只在显式调用时跑；
+           M5 起接受 @@--basis full|sample@@：sample 时量的是**取样媒体**、遮罩取取样包、落 cache/<vid>/sample/measure.json，
+           且 @@source.basis@@ **只在取样模式写**（顶层 measure.json 一行不动，M1 的确定性锚点继续有效））
+sample     M5 取样包：判型与信息流画面旁证用的「少量窗口取样帧」→ cache/<vid>/sample/（**私有根**）
+           （默认片头 10% / 中段 50% / 片尾 90% 各 @@[sample].window_sec=30 s@@。**每窗单独下载**再由 ffmpeg
+           concat 拼成一个媒体文件 —— yt-dlp 的逗号多窗口在本机实测**只下第一段**（两种写法产物字节相同），
+           所以不交给它；抽帧 @@[sample].fps=1@@、index.json 是**分段线性**的权威时间映射（禁用 section_offset）。
+           自带三条自检：拼接实测时长 / 每窗首帧 t≈窗口起点 / coverage.sampled_sec 用实测值；
+           覆盖口径会打印一行"只看了 X s / Y s"，**不许当成全片结论**。@@--window-sec@@ 可临时改窗口长度。
+           绝不写 cache/frames/index.json、cache/<vid>/media/ 或顶层 overlay.json / measure.json）
+ → out/<vid>/_meta/sheets/*.png + _meta/sheet.json
            （每格只烧序号、**不烧时间码**；行列→帧→t 的权威映射只在 sheet.json；面板里的字**一律不采信**，
            读字请用 frames --read。--from/--to 给时间区间、--max 给格数上限，不指定就从 cache/frames/ 均匀取样；
-           空白格按标准差跳过、不占序号；拼版只用已有 Pillow+numpy。**只在显式调用时跑**）
+           空白格按标准差跳过、不占序号；拼版只用已有 Pillow+numpy。**只在显式调用时跑**；
+           M5 起接受 @@--basis full|sample@@：sample 时帧来自取样包、面板用 sample_NN.png、清单写
+           **_meta/sheet_sample.json**（与整片 sheet.json **分文件**，互不覆盖；--from/--to 按**原始时间轴**，
+           不再做 media.sections 换算；t 一致性与新增的 window 校验都比对**取样包索引**，不会假失败））
 frames     M2 按时间取帧：--at HH:MM:SS 给该时刻最近的一帧 + 前后各一帧（3 条，含路径、t、实际尺寸与来源）；
            --read 给该时刻的**读字单帧**，默认**媒体原生分辨率**：缓存帧本身已是原生尺寸就直接复用它
            （sha256 与 cache/frames 那张逐字节相同），否则用 ffmpeg 现抽原生帧（PNG 无损、无 scale 滤镜）到
