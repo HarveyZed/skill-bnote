@@ -203,7 +203,10 @@ def panel_names(meta_dir) -> set:
             continue
         try:
             doc = json.loads(p.read_text(encoding="utf-8"))
-        except (ValueError, OSError):
+        except (ValueError, OSError) as exc:
+            # 不静默当空集：清单读不了会让"面板存在性"判定全灭（引用全报"查不到 tile"），
+            # 那正是读者最需要知道的一行 —— 但也别因此中断校验，继续看下一份。
+            print("[panels] ⚠ 面板清单读不了（%s）：%s —— 当作空集，但这可能是产物损坏" % (p.name, exc))
             continue
         if isinstance(doc, dict):
             out |= {str(t.get("sheet")) for t in (doc.get("tiles") or []) if isinstance(t, dict)}
