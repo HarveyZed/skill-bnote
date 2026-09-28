@@ -667,9 +667,30 @@ def cmd_triage(args):
     T1 永远跑（只读元信息）；--level t2 加取样量测（**只读已有产物**，绝不解码整片）；
     --level t3 先产出取样面板（sheet --basis sample），**面板落盘之后**才写 mode_hint ——
     这样 evidence.t3_panel 不会指向不存在的文件（复核 watch 1）。
+
+    **降级守卫（0.15.1）**：--force 但**没显式给 --level** 时，本次要跑的层级若 ⊆ 已有
+    mode_hint.json 的 levels，就跳过并提示 —— 默认值（t1）跑一次会把更全的证据（t1/t2/t3）
+    静默覆盖成 t1（实测 0e6bb764…(t1,t2,t3) → 2bdc3924…(t1)）。显式 --level 就是明确的降级意图，
+    照办不拦。
     """
     cfg, paths, vid = _ctx(args)
+    explicit_level = args.level is not None
     level = args.level or str((cfg.get("triage") or {}).get("default_level") or "t1")
+    if args.force and not explicit_level:
+        prev = paths.read_json(paths.meta_dir() / triage_layer.MODE_HINT_NAME, None) or {}
+        prev_levels = [str(x) for x in (prev.get("levels") or [])]
+        want = ["t1"] + (["t2"] if level in ("t2", "t3") else []) + (["t3"] if level == "t3" else [])
+        if prev_levels and set(want) <= set(prev_levels):
+            if set(prev_levels) > set(want):
+                why = ("已有更全的判型证据（%s）——直接跑会把更全的证据静默截短"
+                       % "/".join(prev_levels))
+            else:
+                why = "已有同级判型证据（%s）——重复跑没有新信息" % "/".join(prev_levels)
+            print("[triage] 跳过：--force 没显式给 --level（本次按默认 %s），而%s" % (level, why))
+            print("[triage] 建议 %s（置信 %.2f）｜ 层级 %s ← 保留原结果"
+                  % (prev.get("suggest"), prev.get("confidence") or 0, "/".join(prev_levels)))
+            print("[triage] 要重跑或降级请显式指定：--force --level %s" % level)
+            return 0
     sheet_doc = None
     if level == "t3":
         try:
