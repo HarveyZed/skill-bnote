@@ -178,6 +178,10 @@
 | segment | caption_strip_ratio | `0.14` |
 | segment | diff_alpha | `0.5` |
 | segment | diff_threshold | `0.035` |
+| segment | ink_adaptive | `True` |
+| segment | ink_dark_thr | `0.62` |
+| segment | ink_otsu_min_sep | `0.05` |
+| segment | ink_white_bg_min | `0.95` |
 | segment | merge_additive | `True` |
 | segment | merge_gram_contain | `0.45` |
 | segment | merge_hash_dist | `6` |
@@ -575,6 +579,27 @@ auto_caption_strip  = true      # 自动识别烧进画面的口播字幕条并�
 caption_strip_ratio = 0.14      # 字幕条高度占画面比例（自下而上）
 caption_band_multiple = 2.5     # 底部变化率相对中部倍数达到该值才判定为字幕条
 scene_threshold     = 0.04      # strategy=scene 时的 ffmpeg scene 阈值（基线用）
+# —— 墨迹（ink）门槛：**逐帧自适应**（本次修的缺陷：深色主题下 ink 恒为 1.0）——
+# ink 是选帧打分的一维（[ocr].weight_ink=30，见 stable._score_candidate），也是 _pick_frame 强制
+# 入选"墨迹最多"那一张的判据。历史实现是固定阈值 `(small < 0.62).mean()`：深色主题的课整帧都暗于
+# 0.62 → ink 恒 1.0（真实根复算：BV1CCtz6WEvF_p1 22/22 段、BV1F5YM6rEaJ_p1 18/19 段）⇒ 这一维
+# 恒定失效。现在按**这一帧自己的** 48x27 灰度剖面逐帧定门槛（判据与实测见
+# bnote/segmenters/framesig.py 的 INK_DEFAULTS）：
+#   ① 背景水平 bg = 直方图峰（51 桶 x 0.02，3 桶平滑，峰桶内像素均值）；
+#   ② bg >= ink_white_bg_min = **白底帧** → 原样用历史常数 ink_dark_thr
+#      （浅色集因此逐帧零漂移：实测白底帧 p20 1342/1547、p22 2711/2802，|新-旧| 恒为 0）；
+#   ③ 否则（深色/彩色底）→ OTSU 阈值，取**远离 bg 的那一类**占比当 ink（深色主题的内容是亮的）
+#      → 实测 BV1CC 0.115~0.265（中位 0.161）、BV1F5Y 0.099~0.327（中位 0.233）；
+#   ④ OTSU 两类的**类均值差** < ink_otsu_min_sep = 没有"内容/背景"两团（纯色、渐变底、
+#      极低对比帧）→ ink = 0。**不用"阈值贴不贴背景峰"**：低对比度但有内容的深底页阈值就贴
+#      在峰上（BV1CC 段2 那张三表页：背景 0.097、阈值 0.133、墨迹 0.17），按"贴峰"判会把
+#      627 帧有内容的页误判成 0，按类均值差（同页 0.100）则不会。
+# 回退杠杆：ink_adaptive=false 精确复现固定阈值（A/B 与回退用，语义与历史实现同式）。
+ink_adaptive        = true      # 逐帧自适应门槛；false = 精确复现固定阈值（0.62）
+ink_dark_thr        = 0.62      # 历史固定阈值：白底帧与 ink_adaptive=false 时原样用
+ink_white_bg_min    = 0.95      # 背景水平 >= 它 = 白底帧（实测：白底簇 0.958~0.971、深色簇 <=0.097）
+ink_otsu_min_sep    = 0.05      # OTSU 两类均值差的下限（小于它 = 这一帧没有内容/背景两团；
+                                #   实测这 4 集里只触发 1 帧，非白底帧 sep 分布的 p1 = 0.087）
 # 幻灯片样板文字（窗口标题栏 / 页码 / 站名水印）：做"同页判定"前先剔除，否则任意两页都"很像"。
 # 课程专有的页眉字样请写进 config/local.toml 的 [segment] 段。
 boilerplate_patterns = [
