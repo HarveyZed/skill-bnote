@@ -11,6 +11,12 @@ out/<vid>/_meta/figures/NN.png + out/<vid>/_meta/figures.json。
 （相邻取样帧的归一化平均绝对差最大处；变化落在第 k 帧上就取第 k 帧——它才是"变化之后"的画面）；
 窗口内无显著变化（低于 [figures].min_change）就取**窗口中点帧**。上限 [figures].max_per_video。
 
+**跨窗口去重**：同一张静止画面横跨两个窗口时会重复出图（实测 P25：01.png 与 02.png 就是同一页
+notebook 的两个中点帧）。每个候选帧算一个 8×8 dHash（64 位，缩略灰度图按行比较相邻像素），
+与**已入选**的任一候选 Hamming 距离 <= [figures].dedup_hamming（默认 6）即判为重复、跳过。
+被跳过的候选**不静默丢弃**：连 t / window / dHash / hamming / dup_of 一起记进 figures.json 的 skipped，
+可审计、可复核；阈值 0 = 不去重。
+
 抽帧**必须全分辨率**：走 M2 已有逻辑 frames.read_frame()（缓存帧已是原生尺寸就直接复用；
 缓存帧是缩放图或没有缓存就从整片媒体现抽 PNG 无损单帧）—— 插图是要给读者看的，
 拿取样包里那张 720p 缩放 jpg 当插图等于交一张糊图。
@@ -40,7 +46,8 @@ def _params(cfg: dict) -> dict:
     size = f.get("diff_size") or (32, 18)
     return {"max": max(0, int(f.get("max_per_video", 4) or 0)),
             "min_change": float(f.get("min_change", 0.02)),
-            "diff_size": (int(size[0]), int(size[1]))}
+            "diff_size": (int(size[0]), int(size[1])),
+            "dedup_hamming": max(0, min(64, int(f.get("dedup_hamming", 6) or 0)))}
 
 
 def _thumb_gray(path: Path, size) -> bytes | None:
@@ -60,17 +67,46 @@ def frame_diff(a, b) -> float:
     return sum(abs(x - y) for x, y in zip(a, b)) / (255.0 * len(a))
 
 
-def pick_candidates(cfg: dict, paths) -> list:
-    """每个取样窗口一个候选：画面变化最大的一帧；无显著变化取窗口中点帧。"""
+HASH_SIZE = (9, 8)      # dHash 8×8 = 64 位：9 列灰度、按行比较相邻两列
+
+
+def dhash_gray(thumb) -> int | None:
+    """缩略灰度图的 8×8 dHash（64 位整数）：每行比较相邻两列，左 > 右 记 1。
+
+    廉价感知哈希，只用来判"两张候选是不是同一画面"，不读字、不判内容；缩略图尺寸不对返回 None。
+    """
+    if not thumb or len(thumb) != HASH_SIZE[0] * HASH_SIZE[1]:
+        return None
+    bits = 0
+    for row in range(HASH_SIZE[1]):
+        base = row * HASH_SIZE[0]
+        for col in range(HASH_SIZE[0] - 1):
+            bits = (bits << 1) | (1 if thumb[base + col] > thumb[base + col + 1] else 0)
+    return bits
+
+
+def hamming(a, b) -> int | None:
+    """两个 dHash 的 Hamming 距离；任一为空返回 None（无法判定，不去重）。"""
+    if a is None or b is None:
+        return None
+    return bin(int(a) ^ int(b)).count("1")
+
+
+def pick_candidates(cfg: dict, paths) -> tuple:
+    """每个取样窗口一个候选：画面变化最大的一帧；无显著变化取窗口中点帧。
+
+    返回 `(kept, skipped)`：kept 是按窗口顺序、**已跨窗口去重**的候选（含 dHash）；
+    skipped 是被判为近重复而跳过的候选（含 dup_of_t / hamming / dHash），供 figures.json 留痕。
+    """
     idx = paths.read_json(paths.sample_index, None) or {}
     frames = [f for f in (idx.get("frames") or []) if isinstance(f, dict)]
     if not frames:
-        return []
+        return [], []
     p = _params(cfg)
     by_win: dict = {}
     for f in frames:
         by_win.setdefault(int(f.get("window") or 0), []).append(f)
-    out = []
+    kept, skipped = [], []
     for w in sorted(by_win):
         fs = sorted(by_win[w], key=lambda x: float(x.get("t") or 0))
         thumbs = [_thumb_gray(paths.sample_frames / str(f.get("file")), p["diff_size"]) for f in fs]
@@ -83,9 +119,28 @@ def pick_candidates(cfg: dict, paths) -> list:
         else:
             k = diffs.index(best) + 1        # 变化落入第 k 帧：它才是"变化之后"的画面
             why = "窗口 %d 内画面变化最大的一帧（相邻帧归一化平均差 %.4f）" % (w, best)
-        out.append({"t": round(float(fs[k].get("t") or 0), 3), "window": w,
-                    "frame": str(fs[k].get("file") or ""), "why": why})
-    return out[:p["max"]] if p["max"] else []
+        cand = {"t": round(float(fs[k].get("t") or 0), 3), "window": w,
+                "frame": str(fs[k].get("file") or ""), "why": why,
+                "hash": dhash_gray(_thumb_gray(paths.sample_frames / str(fs[k].get("file")), HASH_SIZE))}
+        # 跨窗口去重：与已入选的任一候选比 dHash，近重复就跳过（留痕在 skipped，不静默丢）
+        dup = None
+        for prev in kept:
+            d = hamming(prev.get("hash"), cand["hash"])
+            if d is not None and d <= p["dedup_hamming"]:
+                dup = (prev, d)
+                break
+        if dup is not None:
+            cand.update({"dup_of_t": dup[0]["t"], "dup_of_window": dup[0]["window"],
+                         "hamming": dup[1]})
+            skipped.append(cand)
+            continue
+        kept.append(cand)
+    return (kept[:p["max"]] if p["max"] else []), skipped
+
+
+def _hex(bits) -> str | None:
+    """dHash 的 64 位整数 → 16 位十六进制（留痕用）；None 原样保留。"""
+    return None if bits is None else "%016x" % int(bits)
 
 
 def _media_has_video(cfg: dict, paths):
@@ -115,7 +170,7 @@ def run(cfg: dict, paths, max_n: int | None = None, force: bool = False) -> dict
             old.unlink()
     dest_dir.mkdir(parents=True, exist_ok=True)
 
-    cands = pick_candidates(cfg, paths)
+    cands, skipped = pick_candidates(cfg, paths)
     if max_n is not None:
         cands = cands[:max(0, int(max_n))]
     figs, notes = [], []
@@ -136,16 +191,30 @@ def run(cfg: dict, paths, max_n: int | None = None, force: bool = False) -> dict
         figs.append({"name": name, "t": round(float(c["t"]), 3), "window": c["window"],
                      "frame": fr.get("frame"), "source": fr.get("source"),
                      "size": list(fr.get("size") or []),
+                     "dhash": _hex(c["hash"]),
                      "sha256": sha256_file(dest), "why": c["why"]})
+    # 被去重跳过的候选：记 dup_of（入选那张的图名；图名是本轮才分配的，取不到就退回 t）
+    name_by_t = {round(float(c["t"]), 3): f["name"] for c, f in zip(cands, figs)}
+    skip_doc = [{"t": round(float(s["t"]), 3), "window": s["window"], "frame": s["frame"],
+                 "why": s["why"], "dhash": _hex(s.get("hash")), "hamming": s.get("hamming"),
+                 "dup_of": name_by_t.get(round(float(s.get("dup_of_t") or 0), 3)),
+                 "dup_of_t": s.get("dup_of_t"), "dup_of_window": s.get("dup_of_window")}
+                for s in skipped]
     doc = {"schema": SCHEMA, "vid": paths.vid, "basis": "sample",
-           "max_per_video": p["max"],
+           "max_per_video": p["max"], "dedup_hamming": p["dedup_hamming"],
            "coverage": (paths.read_json(paths.sample_index, None) or {}).get("coverage") or {},
-           "count": len(figs), "figures": figs, "notes": notes}
+           "count": len(figs), "figures": figs, "skipped_count": len(skip_doc),
+           "skipped": skip_doc, "notes": notes}
     paths.write_json(paths.meta_dir() / JSON_NAME, doc)
     if figs:
-        print("[figures] 插图候选 %d 张 → %s（整集上限 %d）" % (len(figs), dest_dir, p["max"]))
+        print("[figures] 插图候选 %d 张 → %s（整集上限 %d；跨窗口去重跳过 %d 张，阈值 hamming<=%d）"
+              % (len(figs), dest_dir, p["max"], len(skip_doc), p["dedup_hamming"]))
         for f in figs:
             print("  %s  t=%.1fs  %s  %s" % (f["name"], f["t"], "x".join(str(x) for x in f["size"]) or "尺寸未知", f["why"]))
+        for s in skip_doc:
+            print("  ~~ 跳过 t=%.1fs（窗口 %d）：与 %s 近重复（hamming=%s <= %d）"
+                  % (s["t"], s["window"], s["dup_of"] or ("t=%.1fs" % (s["dup_of_t"] or 0)),
+                     s["hamming"], p["dedup_hamming"]))
     else:
         print("[figures] 没有插图候选（%s）" % ("；".join(notes) or "取样包为空"))
     return doc

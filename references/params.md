@@ -12,6 +12,7 @@
 | export | desc_max_chars | `14` |
 | export | title_field | `'title'` |
 | export | title_max_chars | `30` |
+| figures | dedup_hamming | `6` |
 | figures | diff_size | `[32, 18]` |
 | figures | enabled | `False` |
 | figures | inline | `False` |
@@ -504,6 +505,7 @@ inline             = false      # 是否允许写手在正文里引用插图 ../
 max_per_video      = 4          # 整集上限：候选张数（超过按窗口顺序截断）与引用配额 warn 都用它
 min_change         = 0.02       # 窗口内"显著画面变化"的下限（相邻取样帧的归一化平均绝对差）；低于它取窗口中点帧
 diff_size          = [32, 18]   # 算帧差用的缩略尺寸（宽 x 高，灰度）——只为比大小，不读字
+dedup_hamming      = 6          # 跨窗口去重的汉明距离阈值（0–64）：候选帧的 8×8 dHash 与**已入选**的任一候选相差 <= 此值即判为同一画面、跳过。0 = 不去重；调大更狠。被跳过的候选连 t/window/dHash/hamming/dup_of 一起记进 figures.json 的 skipped（可审计，不静默丢弃）
 
 [segment]
 strategy            = "stable"  # stable(默认，稳定态+终态收敛) | scene(基线对照)
