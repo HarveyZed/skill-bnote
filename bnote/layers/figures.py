@@ -11,7 +11,7 @@ out/<vid>/_meta/figures/NN.png + out/<vid>/_meta/figures.json。
 （相邻取样帧的归一化平均绝对差最大处；变化落在第 k 帧上就取第 k 帧——它才是"变化之后"的画面）；
 窗口内无显著变化（低于 [figures].min_change）就取**窗口中点帧**。上限 [figures].max_per_video。
 
-**跨窗口去重**：同一张静止画面横跨两个窗口时会重复出图（实测 P25：01.png 与 02.png 就是同一页
+**跨窗口去重**：同一张静止画面横跨两个窗口时会重复出图（实测 01.png 与 02.png 就是同一页
 notebook 的两个中点帧）。每个候选帧算一个 8×8 dHash（64 位，缩略灰度图按行比较相邻像素），
 与**已入选**的任一候选 Hamming 距离 <= [figures].dedup_hamming（默认 6）即判为重复、跳过。
 被跳过的候选**不静默丢弃**：连 t / window / dHash / hamming / dup_of 一起记进 figures.json 的 skipped，

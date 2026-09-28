@@ -14,7 +14,7 @@
 M3 起：``cache/<vid>/overlay.json`` 说"哪些像素不是幻灯片内容"（烧录字幕条 / 标注工具条 /
 水印）。这些像素会**同时**从帧差的两项（dHash 汉明距离 + 像素平均绝对差）、墨迹 ink、清晰度
 sharpness 与送 OCR 的图里挖掉 —— 外物既不该搅乱稳定性判定，也不该把文字塞进 chosen 的
-OCR 文本（OCR 文本参与同页判定的 4-gram 包含度，实测 p20/p21/p22 都被工具条文字污染过）。
+OCR 文本（OCR 文本参与同页判定的 4-gram 包含度，实测多集都被工具条文字污染过）。
 没有 overlay.json 时**按全画面算**（M3 之前的行为）并打印一行说明，不报错。
 """
 from __future__ import annotations
@@ -52,7 +52,7 @@ def _gram_containment(a: str, b: str, n: int = 4, boiler=None) -> float:
     """4-gram 包含度：短的那页有多少 n-gram 出现在长的那页里。
 
     相比于字符集包含度，它对"同页不同阶段"（内容只增不减）敏感，而对"两页都提到 RAG/知识库"
-    这种字符层面的巧合不敏感 —— 实测 p24 两张完全不同的页字符集包含度 0.88，4-gram 只有 0.17。
+    这种字符层面的巧合不敏感 —— 实测两张完全不同的页字符集包含度 0.88，4-gram 只有 0.17。
     """
     A, B = _norm_grams(a, n, boiler), _norm_grams(b, n, boiler)
     if not A or not B:
@@ -295,9 +295,9 @@ def _pick_frame(cfg, paths, frames, idxs, sigs, cheap, ocr, stable_mask=None, oc
         m["ocr_text"] = ocr_info["text"]
         m["score"] = _score_candidate(cfg, m, ocr_info, (m["idx"] - base) / span)
         # §3.4-11：这一帧的角上被**临时遮挡**命中（overlay.json 的 transient_overlay 帧清单）。
-        # 默认只**标记**（penalty=0）：实测这四张交付页的净胜分**全部**来自叠加层自己的字数
-        # （p20 +6.01/16 字、p21 +5.84/6 字、p22 +21 与 +18 字），一旦扣分就会把**终态帧**换成
-        # 同页更早的候选（p22 段 9 要退回 51 s 前的 001318）—— 那正是 M4b occlusion_swap 判错
+        # 默认只**标记**（penalty=0）：实测这几张交付页的净胜分**全部**来自叠加层自己的字数
+        # （每页净胜几分到二十几分、字数几个到十几个），一旦扣分就会把**终态帧**换成
+        # 同页更早的候选（要退回近一分钟前的帧）—— 那正是 M4b occlusion_swap 判错
         # 的同一类退化。被遮住的那一角改由**交付期**的同页镶嵌补回（layers/composite.py），
         # 终态帧照旧是主图。想试扣分的人把 [segment].transient_overlay_penalty 打开。
         m["transient_overlay"] = m["file"] in transient_frames
@@ -359,8 +359,8 @@ def _chosen_doc(c: dict) -> dict:
 
 # M4b「遮挡最少」：**换帧默认关闭**（[roles].occlusion_swap，默认 false），判据本身保留。
 #   occlusion_swap=false 时选帧**完全不做**遮挡换帧，但 occlusion 照旧逐帧算并落盘（证据可查）——
-#   为什么默认关：这条判据在 15 集语料里唯一触发过的那一次就是判错的（p23 段 11，621.5–722.5 s，
-#   把完整渲染的 001404 换成了淡入中的半渲染帧 001244）；逐帧目视证据见 config/default.toml。
+#   为什么默认关：这条判据在十余集语料里只在某一集触发过一次，而那一次就是判错的（把完整渲染
+#   的那一帧换成了淡入中的半渲染帧）；逐帧目视证据见 config/default.toml。
 # 打开后（true）用它下面这两个门槛（都在 [segment] 段可覆盖，见 config/default.toml）：
 #   occ_score_tol：只在"信息量接近"的候选之间比遮挡 —— 打分差超过这个比例就不换，
 #     否则会把**动画中途**的不完整帧（信息少但没被挡）选成主图，那是 M4 一直在防的退化。
@@ -401,7 +401,7 @@ def _apply_roles(cfg, paths, out, masks, role_fn, page_roles=("full_page",)) -> 
         # 终选帧在候选表里的那条记录（角色 / 判据都挂在候选上；chosen 自己不带）
         cur = next((c for c in cands if c.get("file") == chosen.get("file")), None)
         # "可当主图"的候选：full_page 与 app_screen **同等对待**（app_screen 仍是整屏内容，
-        # M4b 的语义就是"整页优先照旧可作主图"，不做分档，否则 P53 这种整集 IDE 录屏会被
+        # M4b 的语义就是"整页优先照旧可作主图"，不做分档，否则整集 IDE 录屏素材会被
         # 强行换成同一页里得分更高的幻灯片式候选，反而偏离基线）
         pool = [c for c in cands if c.get("role") in page_roles]
         if pool and (cur is None or cur.get("role") not in page_roles or cur not in pool):
@@ -415,7 +415,7 @@ def _apply_roles(cfg, paths, out, masks, role_fn, page_roles=("full_page",)) -> 
             seg["chosen"] = _chosen_doc(best)
             cur = best
         # M4b-3：同档候选里挑遮挡最少的（只换"信息量接近且遮挡明显更少"的）。
-        # **默认关闭**（[roles].occlusion_swap=false）：这条判据在 15 集语料里唯一的真实样本上
+        # **默认关闭**（[roles].occlusion_swap=false）：这条判据在十余集语料里唯一的真实样本上
         # 判错了方向（见上方注释与 config/default.toml）；occlusion 数值照旧逐帧落盘。
         if swap_on and pool and cur is not None:
             top = max(c["score"] for c in pool)

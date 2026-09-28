@@ -365,7 +365,7 @@ def _anchor_drift_warns(cfg, paths, paras: list, md: str) -> list:
                 continue
             m = difflib.SequenceMatcher(None, head, prev, autojunk=False).find_longest_match(0, len(head), 0, len(prev))
             # 判据收紧：重合 >=12 字 **且**落在更早段落靠前处（<=40 字）才提示。
-            # 8 字门槛会误报：实测 P3 命中「gent的开发和」、P8 命中单词「ontology」，两处锚点本来就是对的。
+            # 8 字门槛会误报：实测有两处本来正确的锚点被提示（短词重合），收紧到 12 字即消失。
             if m.size >= min_chars and m.a <= _DRIFT_MATCH_HEAD and m.b <= head_chars:
                 warns.append({"level": "warning", "owner": "text",
                               "message": "小节 %s 的首句像是来自更早的段落 %s（%s）——合并相邻段落时请用**最早**那段的锚点"
@@ -422,7 +422,7 @@ def _ref_errors(md: str, paths) -> list:
     ② 引用的面板名在 `sheet.json` ∪ `sheet_sample.json` 的 `tiles[].sheet` 里查不到；
     ③ 引用的插图名在 `_meta/figures.json` 的 `figures[].name` 里查不到（0.14.0，同"面板存在性"一套）；
     ④ **引用要能相对 lecture.md 自己解析到真实文件**（0.15.1 新增，`refs.ref_path_in`）——
-    名字在清单里 ≠ 图还在，前缀写错也在这里现形：P53 真产物里 `../_meta/figures/01.png` 的名字
+    名字在清单里 ≠ 图还在，前缀写错也在这里现形：真实产物里 `../_meta/figures/01.png` 的名字
     在 figures.json 里、`check` 报 0 错，但它相对 lecture.md 指向 `out/_meta/…`，是一张坏图。
 
     **t 与索引的一致性不在这里重复实现**：正文里只有路径、没有时间，结构上查不了；它归
@@ -534,7 +534,7 @@ def validate(cfg, paths) -> tuple:
         ratio = float(cfg.get("text", {}).get("min_cover_ratio", 0.70))
         # 分母用字幕**正文**（不含 transcript.md 里的时间戳，否则会把基准抬高）
         src = sum(p["chars"] for p in paras)
-        # 分子只算**正文**：元信息块（标题/时长/源那条）有 200 来字，算进去会让超短集永远达标（实测 P11 因此漏检）
+        # 分子只算**正文**：元信息块（标题/时长/源那条）有 200 来字，算进去会让超短集永远达标（实测超短集因此漏检）
         got = _chars(NL.join(b for _, b in _sections(md)))
         if src and got < src * ratio:
             warns.append({"level": "warning", "owner": "text",

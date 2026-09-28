@@ -4,7 +4,7 @@
 ------------------------------
 M3 之前"段内挑哪一帧"只看 OCR 字数 + 墨迹 + 清晰度，于是一段**出镜画面**（讲者照片 / 现场
 镜头）或一页**放大截图**只要字多、清楚，就会被选成该页的终态图，讲义里就出现一张不是幻灯片
-的"主图"。实测靶子：p20 356.9~417.5 s 整段都是演讲现场配图，旧口径把它当成一页。
+的"主图"。实测靶子：某集有一整段都是演讲现场配图，旧口径把它当成一页。
 M4 的角色层把每张候选帧判成五个角色之一，切片层据此实现"**整页优先**"（段内只要存在
 full_page 候选，终态就必须选整页）—— 判据要**便宜、可解释、只用已有输入**。
 
@@ -35,15 +35,15 @@ segmenters/framesig.py 的 APP_DEFAULTS。
 
 **occlusion 不是角色**，是给切片层用的标量：最大连通前景块占整幅的比例（见 _occlusion）。
 本层照旧逐帧算它并落进 role_evidence（**判据保留**）；切片层是否据此换帧由 [roles].occlusion_swap
-决定，**默认 false = 关** —— 这条判据在 15 集语料里唯一触发的一次（p23 段 11）判错了方向：把幻灯片
+决定，**默认 false = 关** —— 这条判据在十余集语料里只在某一集触发过一次，判错了方向：把幻灯片
 自己的深色面板当成前景块、把**淡入中的半渲染帧**当成"少遮挡"，换掉了完整渲染的那一页。
 理由与逐帧证据见 config/default.toml 的 [roles] 段。
 
 **为什么这样判**（每条都对着实测样本，不凭想象）：
-* 出镜/现场照片（p20 356.9~417.5 s，6 张候选帧）实测 skin_frac 0.103~0.104，而同集幻灯片
+* 出镜/现场照片（一段现场配图，数张候选帧）实测 skin_frac 0.103~0.104，而同集幻灯片
   最高只有 0.036 —— 肤色是这条判据里唯一分得开的**正面证据**，所以 presenter 只认它。
   肤色规则另加饱和度上/下限：幻灯片里的橙/朱红填充块能骗过经典 RGB 规则，但饱和度接近 0.9。
-* insert 的黑边判据必须**相对本集**：p21/p22 整集都带 4:3 上下黑边（每边 4%~5%），用绝对阈值
+* insert 的黑边判据必须**相对本集**：有些集整集都带 4:3 上下黑边（每边 4%~5%），用绝对阈值
   会把所有幻灯片判成插播。一幅画面的 w/h 在同一集里是常数，只能记进 signals，不能当判据。
 * zoom_detail 同理用**本批笔画中位数**（不是绝对像素数）；笔画量测的深色阈值还要按本帧背景
   下移——灰底/深底幻灯片的背景亮度本身就在 0.5~0.6，固定阈值会把整块背景算成笔画，实测
@@ -98,8 +98,8 @@ def params(cfg: dict) -> dict:
         "letterbox_window_min": float(r.get("letterbox_window_min", 0.25)),
         "presenter_skin_min": float(r.get("presenter_skin_min", 0.05)),
         "presenter_mode_max": float(r.get("presenter_mode_max", 0.35)),
-        # 8.0 是**保守到在本语料上不触发**的取值：现有 5 集 + BV1CC 里没有"真·页内放大截图"
-        # 样本，而字号偏大的幻灯片（p21 000472/002325）实测是 6.0×本集中位数，取 8.0 正好把它们
+        # 8.0 是**保守到在本语料上不触发**的取值：现有校准素材里没有"真·页内放大截图"
+        # 样本，而字号偏大的幻灯片实测是 6.0×本集中位数，取 8.0 正好把它们
         # 挡在门外，落回 full_page（低置信）。宁可判不出，也不要靠一个没有真样本的阈值去换主图。
         "zoom_stroke_multiple": float(r.get("zoom_stroke_multiple", 8.0)),
         "zoom_mode_min": float(r.get("zoom_mode_min", 0.40)),
@@ -163,7 +163,7 @@ def _frac(mask: np.ndarray, keep) -> float:
 def _skin_mask(rgb: np.ndarray, p: dict) -> np.ndarray:
     """廉价肤色判据（RGB 规则 + 饱和度上下限）。
 
-    为什么加饱和度上下限：课程幻灯片里大量**橙色/朱红填充块**（p22 的流程图）能骗过经典
+    为什么加饱和度上下限：课程幻灯片里大量**橙色/朱红填充块**（流程图那类页面）能骗过经典
     RGB 肤色规则（r>g>b），但它们的饱和度接近 0.9，而人脸/手的肤色多在 0.2~0.5；
     上限 skin_sat_max 是这条判据不误伤彩色幻灯片的关键。
     """
@@ -257,7 +257,7 @@ def _bars(gray: np.ndarray, dark_max: float, line_frac: float) -> tuple:
 
     只统计**首尾连续段**，中间的黑条不算边。窗口（整幅减去黑边的那些行列）的亮度是用来区分
     "插屏黑边"与"深色主题自身的黑"的：真正的插屏黑边之外是另一幅画面（多为亮底），而黑底课件
-    （p46/BV1CC）整幅都黑，窗口也黑。实测 p46 的"insert"帧窗口均值远低于 0.25。
+    整幅都黑，窗口也黑。实测深色课件的"insert"帧窗口均值远低于 0.25。
     """
     dark = gray < dark_max
     rows = dark.mean(axis=1)
@@ -301,7 +301,7 @@ def features(cfg: dict, path, masks=None, p: dict | None = None) -> dict:
     fh, fw = gray.shape
     keep = _keep_grid(masks, fw, fh)
     med = float(np.median(gray))
-    # 笔画量测的深色阈值按**本帧背景**下移：灰底/深底幻灯片（p21/p22 大量存在）背景亮度本身
+    # 笔画量测的深色阈值按**本帧背景**下移：灰底/深底幻灯片大量存在，背景亮度本身
     # 就在 0.5~0.6，用固定 0.62 会把整块背景算成"笔画"，游程中位数直接爆到 31 px。
     stroke_thr = min(p["ink_dark_max"], med - p["stroke_gap"])
     hist, _ = np.histogram(gray, bins=20, range=(0.0, 1.0))
@@ -312,12 +312,12 @@ def features(cfg: dict, path, masks=None, p: dict | None = None) -> dict:
     white = gray > 0.90
     light = gray > p["light_threshold"]        # 浅底占比（只作记录：判据一律用与主题无关的量）
     # 底色 = 直方图峰所在档的中心；前景 = 与底色反差够大的像素。
-    # **主题无关**是这里的硬要求：BV1CCtz6WEvF_p1 是深色主题（底色 0.03、亮字），
-    # 用"暗于 0.62 = 墨迹"会把整幅算成内容、把深色页判成黑场（实测 mean=0.061）。
+    # **主题无关**是这里的硬要求：深色主题素材（底色 0.03、亮字）如果用
+    # "暗于 0.62 = 墨迹"，会把整幅算成内容、把深色页判成黑场（实测 mean=0.061）。
     bg = float((int(np.argmax(hist)) + 0.5) * 0.05)
     content = np.abs(gray - bg) > p["fg_gap"]
     # 黑边（letterbox）先从"内容"里去掉：它是视频取景带来的整行/整列纯黑，不是页面版式。
-    # 留着会把 content_frac 拉到 1.00、bands 虚高（p21/p22 整集都带 4:3 上下黑边），
+    # 留着会把 content_frac 拉到 1.00、bands 虚高（有些集整集都带 4:3 上下黑边），
     # 于是"内容是否铺满整幅"这条 zoom 判据永远成立。
     dark_frame = gray < p["letterbox_dark_max"]
     bars_mask = ((dark_frame.mean(axis=1) >= p["letterbox_line_frac"])[:, None]
@@ -400,7 +400,7 @@ def classify(feat: dict, p: dict, stroke_med: float | None = None,
 
     两条判据是**相对**的（都相对本集）：笔画尺度相对本集候选帧中位数（stroke_med），
     黑边宽度相对本集黑边中位数（bar_base）。理由：同一集的取景与字号是常数，绝对值判不了
-    "这一帧与别的不一样"；p21/p22 整集都带 4:3 上下黑边（每边约 4%~5%），用绝对阈值会把它们
+    "这一帧与别的不一样"；有些集整集都带 4:3 上下黑边（每边约 4%~5%），用绝对阈值会把它们
     全判成插播。
 
     兜底给 full_page（低置信）：本判据只认**正面证据**（纯色 / 黑边 / 肤色 / 笔画尺度），
@@ -416,7 +416,7 @@ def classify(feat: dict, p: dict, stroke_med: float | None = None,
     # 2) insert：黑边显著**多于本集常态**
     bars = feat["bar_top"] + feat["bar_bottom"] + feat["bar_left"] + feat["bar_right"]
     need = max(p["letterbox_min"], float(bar_base) + p["letterbox_delta"])
-    # 窗口还要够亮：否则那是深色主题自身的黑底，不是插屏黑边（实测 p46 的黑底课件页
+    # 窗口还要够亮：否则那是深色主题自身的黑底，不是插屏黑边（实测黑底课件页
     # bars_total 能到 1.5，但窗口均值 < 0.25）
     if bars >= need and feat["bar_window_mean"] >= p["letterbox_window_min"]:
         conf = min(0.9, 0.5 + 0.5 * (bars - need) + 0.5 * bars)
@@ -426,7 +426,7 @@ def classify(feat: dict, p: dict, stroke_med: float | None = None,
     # 3) presenter：肤色聚集 **且整幅没有成片的单一底色**（照片/现场镜头）
     #    mode_frac 是这条判据的关键：真人照片的亮度分布没有"一片占 35% 以上的底色"
     #    （实测讲者照片 0.28），而幻灯片无论白底/灰底/深底都有一大片底色（实测 0.38~0.87）。
-    #    只看肤色会把幻灯片里的粉/橙填充块与红笔笔迹误判成出镜（实测 p21/p22/BV1CC 共 6 例）。
+    #    只看肤色会把幻灯片里的粉/橙填充块与红笔笔迹误判成出镜（实测共 6 例）。
     if (feat["skin_frac"] >= p["presenter_skin_min"]
             and feat["mode_frac"] <= p["presenter_mode_max"]):
         conf = min(0.85, 0.45 + 2.0 * feat["skin_frac"])

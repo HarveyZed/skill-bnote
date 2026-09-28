@@ -23,8 +23,8 @@ M3 起**按遮罩算**：存在 `cache/<vid>/overlay.json` 时，给**同一条�
 加一个 `drawbox=...:t=fill`（涂成常数），freezedetect / scdet 于是只看没被遮住的像素 ——
 "挖掉遮罩后重算"**不需要再解码一遍**（这正是 M1 把量测做成单遍链的用处）。拿不到 overlay.json
 时按**全画面**算，并在产物 applicability 里写明 masked=false + mask_source=null（不静默降级）。
-烧录字幕每秒在变，未遮罩时 freezedetect 会被切得很碎：BV1CCtz6WEvF_p1 实测未遮罩 1670 段 /
-覆盖 96.5% 时长，遮罩后段数大幅下降。
+烧录字幕每秒在变，未遮罩时 freezedetect 会被切得很碎：深色主题素材实测未遮罩 1600 余段 /
+覆盖 96% 时长，遮罩后段数大幅下降。
 """
 from __future__ import annotations
 
@@ -240,9 +240,9 @@ def _sampling(paths, basis=None) -> tuple[int | None, float | None]:
     """抽帧采样盲区上界：整片读 cache/frames/index.json，取样读取样包索引（不存在就 None）。
 
     **取样模式下这个数不小**：它是"相邻取样帧的最大时间间隔"，而取样帧只落在几个窗口里，
-    所以它天然包含**窗口之间**的距离（P25 实测 105.4 s，窗口 1 末帧 62.6 s → 窗口 2 首帧 168.0 s）。
+    所以它天然包含**窗口之间**的距离（实测可达百余秒，远大于窗口内相邻取样帧的间隔）。
     别把它当"窗口内的稀疏程度"；"哪几段完全没看"另有取样包 index.json 的
-    coverage.uncovered_max_gap_sec（按窗口边界算，实测 104.4 s）——两者相差的是帧粒度。
+    coverage.uncovered_max_gap_sec（按窗口边界算，实测同为百余秒）——两者相差的是帧粒度。
     """
     idx = (basis or {}).get("index") or paths.read_json(paths.frames / "index.json")
     if not idx:
