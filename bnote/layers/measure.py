@@ -403,7 +403,8 @@ def run(cfg: dict, paths, media_path: Path, force: bool = False, basis=None) -> 
     （**不碰顶层**）。
     """
     dest = paths.sample_measure if basis else paths.measure
-    check_basis_dest(dest, basis, "measure.json", "measure.json")   # 同名不同目录：靠 paths 决定
+    check_basis_dest(dest, basis, "measure.json", "measure.json",
+                     paths.cache, paths.sample)      # **同名**：必须连目录一起比
     if not cfg["measure"].get("enabled", True):
         print("[measure] 已按配置关闭（[measure].enabled=false），跳过")
         return {}

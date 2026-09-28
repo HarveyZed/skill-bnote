@@ -746,7 +746,8 @@ def run(cfg: dict, paths, force: bool = False, basis: dict | None = None) -> dic
         return {}
     t0 = time.monotonic()
     doc = analyze(cfg, paths, frames, basis=basis)
-    check_basis_dest(dest, basis, "overlay.json", "overlay.json")   # 同名不同目录：靠 paths 决定
+    check_basis_dest(dest, basis, "overlay.json", "overlay.json",
+                     paths.cache, paths.sample)      # **同名**：必须连目录一起比
     dest.parent.mkdir(parents=True, exist_ok=True)     # 只建自己要写的那一层
     paths.write_json(dest, doc)
     print(summary_line(doc, time.monotonic() - t0, _rel(paths, dest)))

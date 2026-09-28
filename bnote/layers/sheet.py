@@ -317,7 +317,9 @@ def run(cfg, paths, t_from=None, t_to=None, want=None, preset=None, cols=None, r
     doc, info = build(cfg, paths, t_from=t_from, t_to=t_to, want=want,
                       preset=preset, cols=cols, rows=rows, basis=basis)
     dest = paths.meta_dir() / (SHEET_JSON_SAMPLE_NAME if basis else SHEET_JSON_NAME)
-    check_basis_dest(dest, basis, SHEET_JSON_NAME, SHEET_JSON_SAMPLE_NAME)
+    # sheet 两种 basis 同目录（_meta/），靠文件名区分；overlay / measure 同名不同目录，靠目录区分
+    check_basis_dest(dest, basis, SHEET_JSON_NAME, SHEET_JSON_SAMPLE_NAME,
+                     paths.meta_dir(), paths.meta_dir())
     paths.write_json(dest, doc)
     problems = verify(paths, doc, basis)
     p = doc["params"]

@@ -188,17 +188,27 @@ def _probe_with_ffmpeg(ffmpeg: str, media_path) -> dict:
 FULL_BASIS = "cache/frames/index.json"
 
 
-def check_basis_dest(dest, basis, full_name: str, sample_name: str) -> None:
-    """写前断言（复核 2026-09-28 裁定 (b)）：目标文件必须与 basis 对得上。
+def check_basis_dest(dest, basis, full_name: str, sample_name: str,
+                     full_dir=None, sample_dir=None) -> None:
+    """写前断言（复核 2026-09-28 裁定 (b)，2026-09-28 补目录比对）：目标必须与 basis 对得上。
 
     防的是"将来手滑用旧路径写新数据"——例如取样 basis 却写进整片的 sheet.json，
-    那会把整片面板的 tiles 洗掉，check 立刻假报"引用的面板没有 tile"。basis=取样时还要求
-    basis 自证是取样包（name == "sample"），两个真源互相校验。
+    那会把整片面板的 tiles 洗掉，check 立刻假报"引用的面板没有 tile"。
+
+    **为什么必须连目录一起比**：overlay / measure 的整片与取样**同名**（都是 overlay.json /
+    measure.json），只比 Path(dest).name 必然相等 —— 断言会变成走过场，而这两个文件恰恰是
+    "写错目录就污染顶层产物"的那两个。所以调用方要传 full_dir / sample_dir（sheet 两者相同，
+    传 _meta/ 即可，那种情况靠文件名区分）。basis=取样时还要求 basis 自证是取样包。
     """
+    d = Path(dest)
     want = sample_name if basis else full_name
-    if Path(dest).name != want:
+    if d.name != want:
         raise SystemExit("[basis] 内部错误：basis=%s 却要写 %s（应为 %s）"
-                         % ((basis or {}).get("name") or "full", Path(dest).name, want))
+                         % ((basis or {}).get("name") or "full", d.name, want))
+    want_dir = sample_dir if basis else full_dir
+    if want_dir is not None and Path(want_dir) != d.parent:
+        raise SystemExit("[basis] 内部错误：basis=%s 的落点目录是 %s，预期 %s"
+                         % ((basis or {}).get("name") or "full", d.parent, want_dir))
     if basis and basis.get("name") != "sample":
         raise SystemExit("[basis] 取样 basis 自证失败：name=%r" % (basis.get("name"),))
 
