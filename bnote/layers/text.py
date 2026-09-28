@@ -169,8 +169,11 @@ def _vision_block(cfg, paths) -> str:
     开关：`[text].with_vision`（显式 bnote stream --with-vision 也会开它）——**默认关**，关了返回
     空串（模板里的 `{{VISION_BLOCK}}` 被替换成空，材料与 0.12.0 等价）。
     `[figures].inline` 决定写手**能不能在正文引用**插图（默认 false = 可以看、不许引）；
-    面板（`../_meta/sheets/<name>.png`）**只作材料**、不再给引用写法——0.14.0 前它由 `[sheet].inline`
+    面板（`_meta/sheets/<name>.png`）**只作材料**、不再给引用写法——0.14.0 前它由 `[sheet].inline`
     控制，那条语义已改（幻灯片模式不受影响，见 config 注释）。
+
+    路径**按交付稿**给（0.15.1）：`lecture.md` 在 out/<vid>/ 下，写手的引用也写给交付稿，
+    故一律**不带** `../`（旧契约的 `../_meta/…` 是相对 text/NN.md 的形态，拼装后解析不到）。
     """
     if not (cfg.get("text") or {}).get("with_vision"):
         return ""
@@ -189,7 +192,7 @@ def _vision_block(cfg, paths) -> str:
     if sheets:
         lines += ["**画面旁证（取样面板）**",
                   "",
-                  "- 面板：%s（共 %d 格）→ 路径 `../_meta/sheets/<name>.png`"
+                  "- 面板：%s（共 %d 格）→ 路径 `_meta/sheets/<name>.png`（相对工作目录）"
                   % ("、".join("`%s`" % s for s in sheets), len(doc.get("tiles") or [])),
                   "- **只覆盖 %.1f%% 时长**（最大未采样间隔 %ss）：它**不代表全片**，没看到的地方不许推断" %
                   ((cov.get("sampled_ratio") or 0) * 100, cov.get("uncovered_max_gap_sec")),
@@ -205,9 +208,10 @@ def _vision_block(cfg, paths) -> str:
         if inline:
             lines += ["**只在关键时刻引一张**，三条同时满足才算：① 画面里有与口播**指涉一致**的可见对象\n"
                       "（界面 / 图表 / 代码 / 演示结果 / 流程图 / 公式）；② 该对象用文字说清会明显更长或更容易失真；\n"
-                      "③ 不是纯人像、纯滚动、过渡画面或装饰。**没有合适的就不引——0 张完全合格**。\n"
-                      "写法：`![他在这里演示的是 Xxx（一句话）](../_meta/figures/01.png)`，紧跟相关那一段之后；\n"
-                      "引用只能用 `../_meta/figures/<name>.png` 这一种相对路径。",
+                      "③ 不是纯人像、纯滚动、过渡画面或装饰，**画面里有临时 UI 弹层（菜单 / 右键菜单 / 提示框 /\n"
+                      "鼠标提示）也不算**。**没有合适的就不引——0 张完全合格**。\n"
+                      "写法：`![他在这里演示的是 Xxx（一句话）](_meta/figures/01.png)`，紧跟相关那一段之后；\n"
+                      "引用只能用 `_meta/figures/<name>.png` 这一种相对路径（**相对交付稿 lecture.md**，不带 `../`）。",
                       ""]
         else:
             lines += ["本次 **`[figures].inline=false`**：插图候选只作**你看画面的材料**，\n"
