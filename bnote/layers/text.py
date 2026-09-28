@@ -162,9 +162,9 @@ def build_chunks(cfg, paths, paragraphs: list, meta: dict) -> list:
 def _vision_block(cfg, paths) -> str:
     """画面旁证材料块（M5，§3.6-5）：把取样面板交给写手，并写死两条规矩。
 
-    开关：@@[text].with_vision@@（显式 bnote stream --with-vision 也会开它）——**默认关**，
-    关了返回空串（模板里的 @@{{VISION_BLOCK}}@@ 被替换成空，材料与 0.12.0 等价）。
-    @@[sheet].inline@@ 决定写手**能不能在正文引用**这些面板（默认 false = 可以看、不许引）。
+    开关：`[text].with_vision`（显式 bnote stream --with-vision 也会开它）——**默认关**，
+    关了返回空串（模板里的 `{{VISION_BLOCK}}` 被替换成空，材料与 0.12.0 等价）。
+    `[sheet].inline` 决定写手**能不能在正文引用**这些面板（默认 false = 可以看、不许引）。
     """
     if not (cfg.get("text") or {}).get("with_vision"):
         return ""
