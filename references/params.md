@@ -96,6 +96,16 @@
 | overlay | handwriting_sat_min | `0.45` |
 | overlay | handwriting_stride | `2` |
 | overlay | handwriting_val_min | `0.35` |
+| overlay | pip_active_min | `0.5` |
+| overlay | pip_amp_max | `0.12` |
+| overlay | pip_amp_min | `0.0015` |
+| overlay | pip_cell_eps | `0.004` |
+| overlay | pip_enabled | `True` |
+| overlay | pip_grid_cols | `20` |
+| overlay | pip_max_area | `0.25` |
+| overlay | pip_min_cells | `2` |
+| overlay | pip_pairs_max | `40000` |
+| overlay | pip_sync_max | `0.6` |
 | overlay | widget_changed_max | `0.05` |
 | overlay | widget_color_min | `6` |
 | overlay | widget_edge_min | `0.03` |
@@ -344,6 +354,24 @@ widget_max_area       = 0.09   # 面积上限（太大就不是角状外物了�
 widget_edge_min       = 0.03   # 全分辨率梯度密度下限（有细小字符）
 widget_color_min      = 6      # 显著色块色调档数下限（有彩色色块；**两条都要满足**：
                                # 幻灯片表格的梯度比工具条更高，只看梯度会把表格挖掉）
+
+# —— M6 新增：画中画讲师小窗（kind=pip_window，overlay 的第三类固定区域）——
+# 三条判据**全部同时成立**才算：① 位置固定 + 长时间常驻；② 内容持续小幅变化（不是每帧全换）；
+# ③ **与全帧变化事件不同步**（把"独立运动的人脸窗"与"整屏滚动的文档"分开的那条）。
+# 实测（P33 取样包 1230×720、89 帧对）：小窗 4 格活跃率 0.74~1.00、|与全帧变化的相关| ≤ 0.51、
+# 面积 1.6%；同一帧里滚动文档的格子相关 0.9~1.0 —— 第 ③ 条把两边分得很开。
+# 不误伤实测：P48–P52（全屏幻灯片、无人物无小窗）、p20/p22（只有烧录字幕）**区域 0**。
+# 默认**开**：误挖风险由「面积上限 ≤ 25%」+「必须与全帧变化不同步」两条压住（见 PACK-PIP-WINDOW.md）。
+pip_enabled           = true   # false = 不做画中画小窗判定（消费方照旧只挖字幕条等）
+pip_grid_cols         = 20     # 统计网格列数（整幅等分；行数按画面长宽比推出，跨帧固定）
+pip_cell_eps          = 0.004  # 单格"这一对帧动了"的判定（低分辨率灰度平均绝对差）
+pip_active_min        = 0.5    # 活跃率下限：这一格要在 >= 一半的帧对上都在动（= 长时间常驻）
+pip_amp_min           = 0.0015 # 幅度中位下限：低于它算 JPEG/采样噪声，不算"内容在变"
+pip_amp_max           = 0.12   # 幅度中位上限：高于它算"整块换内容"（换页 / 快速滚动）
+pip_sync_max          = 0.6    # |与全帧变化的相关| 上限（**关键那条**：滚动文档 ≈1 / 人脸窗 ≈0）
+pip_max_area          = 0.25   # 面积上限：超过就当"幻灯片里嵌入的视频"或整屏动画，不挖（防伤正文）
+pip_min_cells         = 2      # 至少这么多格连通才算一个窗口（1 格太小，更像噪声）
+pip_pairs_max         = 40000  # 逐格序列的内存上界（约 35 MB）；超了判据报 insufficient，不半截判
 
 # —— M4 新增：手写笔迹（判据实现在 segmenters/framesig.py 的 stroke_mask，这里只放参数）——
 # 彩色细笔画 = 手写笔迹 → overlay.json 的 handwriting 区域。**只用于把它从 OCR 与帧差/墨迹里
