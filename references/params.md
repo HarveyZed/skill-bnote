@@ -213,6 +213,7 @@
 | text | max_para_sec | `120.0` |
 | text | min_cover_ratio | `0.85` |
 | text | para_gap_sec | `1.2` |
+| text | with_vision | `False` |
 | tools | ffmpeg | `''` |
 | tools | ffprobe | `''` |
 | tools | python | `'python3'` |
@@ -584,6 +585,7 @@ para_gap_sec     = 1.2      # 相邻字幕段间隔 >= 此值 -> 另起一段
 max_para_sec     = 120.0    # 单段最长时长（秒），超过强制切
 anchor_every_sec = 300.0    # 导航锚点间隔（秒）；0 = 只用段落锚点
 chunk_chars      = 6000     # 每块给 writer 的字数上限（渐进式披露的块大小）
+with_vision      = false    # 是否把「取样面板（画面旁证）」放进派单材料（M5；也可用 bnote stream --with-vision 显式开）
 min_cover_ratio  = 0.85     # 整理稿**正文** / 字幕正文 的下限（防摘要化）。12 集实测合法区间 0.913~1.197（写手会收敛口头语），滥用案例 0.55；0.98 会把合法产物判错
 # 锚点走位启发式的阈值（只警告、不判错）：实测 8 字门槛会误报（P3「gent的开发和」、P8「ontology」），收紧到 12 字后假阳性消失、真阳性仍会报
 anchor_drift_min_chars = 12   # 首句与更早段落的最短重合字数，低于此不提示
