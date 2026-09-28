@@ -640,7 +640,8 @@ def cmd_sheet(args):
     """
     cfg, paths, vid = _ctx(args)
     sheet_layer.run(cfg, paths, t_from=args.time_from, t_to=args.time_to, want=args.max_tiles,
-                    preset=args.preset, cols=args.cols, rows=args.rows)
+                    preset=args.preset, cols=args.cols, rows=args.rows,
+                    basis=resolve_basis(paths, args.basis))
     return 0
 
 
@@ -770,6 +771,8 @@ def build_parser():
                     help="单格包围盒档位（默认取 [sheet].preset）")
     sp.add_argument("--cols", type=int, default=None, help="每张面板列数")
     sp.add_argument("--rows", type=int, default=None, help="每张面板行数")
+    sp.add_argument("--basis", choices=["full", "sample"], default="full",
+                    help="full（默认）= 整片帧 → _meta/sheet.json；sample = 取样帧 → _meta/sheet_sample.json")
     sp.set_defaults(func=cmd_sheet)
 
     sp = sub.add_parser("stream", help="信息流/口播类（无幻灯片）：只取音频+字幕，不抽帧、不切片、不分章")

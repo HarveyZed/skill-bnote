@@ -37,6 +37,9 @@ SCHEMA = "bnote-sheet/1"
 ALGO = "bnote-sheet/1"
 SHEETS_DIRNAME = "sheets"
 SHEET_JSON_NAME = "sheet.json"
+# 取样面板的清单**单开一个文件**：整片面板与取样面板并存（sheet_NN.png / sample_NN.png），
+# 一个 sheet.json 装不下两种 basis —— 后跑的会把先跑的 tiles 洗掉，check 立刻报"引用没有 tile"。
+SHEET_JSON_SAMPLE_NAME = "sheet_sample.json"
 APPLICABILITY_NOTE = "面板是缩放拼图：里面的字只当索引，读字请用 frames --read"
 APPLICABILITY_MASKED = False
 
@@ -112,8 +115,12 @@ def burn_index(panel: Image.Image, n: int, scale: int, x0: int, y0: int) -> None
                 y = y0 + pad + row * scale
                 d.rectangle([x, y, x + scale - 1, y + scale - 1], fill=(0, 0, 0))
 
-def build(cfg, paths, t_from=None, t_to=None, want=None, preset=None, cols=None, rows=None):
-    """拼面板。返回 (sheet.json 的内容, 本次统计)；**不落盘**（落盘与自校验在 run() 里）。"""
+def build(cfg, paths, t_from=None, t_to=None, want=None, preset=None, cols=None, rows=None,
+          basis=None):
+    """拼面板。返回 (sheet.json 的内容, 本次统计)；**不落盘**（落盘与自校验在 run() 里）。
+
+    basis=None = 整片帧（cache/frames/index.json）；basis = 取样包（帧根目录与索引都换成取样包的）。
+    """
     sc = cfg.get("sheet") or {}
     pname = str(preset or sc.get("preset") or PRESET_NAMES[1])
     box = dict(PRESETS).get(pname)
@@ -131,13 +138,20 @@ def build(cfg, paths, t_from=None, t_to=None, want=None, preset=None, cols=None,
               % (tiles_want, cap, max_sheets, cols, rows))
         tiles_want = cap
 
-    index = frames_layer.load_index(paths)
+    root = (basis or {}).get("root") or paths.frames
+    index = (basis or {}).get("frames") or frames_layer.load_index(paths)
     if not index:
-        raise SystemExit("没有 cache/frames/index.json（还没抽过帧）：先跑 bnote slides，"
-                         "或对单个时刻用 bnote frames --at / --read")
-    off = frames_layer.section_offset(cfg)
-    lo = frames_layer.to_timeline(cfg, t_from) if t_from else None
-    hi = frames_layer.to_timeline(cfg, t_to) if t_to else None
+        raise SystemExit("没有 %s（还没抽过帧）：先跑 bnote slides，或对单个时刻用 bnote frames --at / --read"
+                         % ((basis or {}).get("relpath") or "cache/frames/index.json"))
+    # 取样帧的 t **已经是原始时间轴**（取样包的分段线性映射算好的）→ off 恒 0、
+    # --from/--to 直接按原始时间轴解析，**不做 section_offset 换算**（§3.6-3）。
+    off = 0.0 if basis else frames_layer.section_offset(cfg)
+    if basis:
+        lo = frames_layer.parse_hms(t_from) if t_from else None
+        hi = frames_layer.parse_hms(t_to) if t_to else None
+    else:
+        lo = frames_layer.to_timeline(cfg, t_from) if t_from else None
+        hi = frames_layer.to_timeline(cfg, t_to) if t_to else None
     if lo is not None and hi is not None and hi <= lo:
         raise SystemExit("--to（%s）必须晚于 --from（%s）" % (t_to, t_from))
     cand = [f for f in index
@@ -150,13 +164,14 @@ def build(cfg, paths, t_from=None, t_to=None, want=None, preset=None, cols=None,
 
     sheets_dir = paths.meta_dir() / SHEETS_DIRNAME
     sheets_dir.mkdir(parents=True, exist_ok=True)     # 只建自己要写的那一层
+    prefix = "sample" if basis else "sheet"          # 两类面板并存，靠前缀区分（互不覆盖）
     sheets_meta, tiles, missing, orphan_blank = [], [], [], 0
     cell = None
     for start in range(0, len(picked), per):
         chunk = picked[start:start + per]
         placed, blank = [], 0
         for f in chunk:
-            src = paths.frames / str(f["file"])
+            src = root / str(f["file"])
             if not src.exists():
                 missing.append(str(f["file"]))
                 continue
@@ -173,7 +188,7 @@ def build(cfg, paths, t_from=None, t_to=None, want=None, preset=None, cols=None,
         if not placed:
             orphan_blank += blank
             continue
-        sname = "sheet_%02d.png" % (len(sheets_meta) + 1)
+        sname = "%s_%02d.png" % (prefix, len(sheets_meta) + 1)
         rows_used = (len(placed) + cols - 1) // cols
         panel = Image.new("RGB", (cols * cell[0], rows_used * cell[1]), (255, 255, 255))
         scale = max(1, min(4, int(min(cell) * _INDEX_FACTOR / 7.0)))
@@ -183,9 +198,12 @@ def build(cfg, paths, t_from=None, t_to=None, want=None, preset=None, cols=None,
             panel.paste(cell_img, (x0, y0))
             n = len(tiles) + 1
             burn_index(panel, n, scale, x0, y0)
-            tiles.append({"index": n, "sheet": sname, "row": r, "col": c,
-                          "t": round(float(f["t"]), 3), "frame": str(f["file"]),
-                          "sha256": sha256_file(src)})
+            tile = {"index": n, "sheet": sname, "row": r, "col": c,
+                    "t": round(float(f["t"]), 3), "frame": str(f["file"]),
+                    "sha256": sha256_file(src)}
+            if basis and f.get("window") is not None:
+                tile["window"] = int(f["window"])   # 只有取样帧带：该帧属于第几个取样窗口
+            tiles.append(tile)
         panel.save(sheets_dir / sname, format="PNG")
         ts = [t["t"] for t in tiles if t["sheet"] == sname]
         sheets_meta.append({"name": sname, "from": min(ts), "to": max(ts),
@@ -193,7 +211,8 @@ def build(cfg, paths, t_from=None, t_to=None, want=None, preset=None, cols=None,
 
     # 只留这一次产出的面板：上一次跑剩下的 png 会让读者看到 sheet.json 里没有的图
     keep = {s["name"] for s in sheets_meta}
-    stale = sorted(p.name for p in sheets_dir.glob("*.png") if p.name not in keep)
+    # 只清**本次这一类**的旧面板：sample_*.png 与 sheet_*.png 并存，互相不能当"旧图"删掉
+    stale = sorted(p.name for p in sheets_dir.glob("%s_*.png" % prefix) if p.name not in keep)
     for nm in stale:
         (sheets_dir / nm).unlink()
 
@@ -201,22 +220,33 @@ def build(cfg, paths, t_from=None, t_to=None, want=None, preset=None, cols=None,
            "params": {"preset": pname, "cols": cols, "rows": rows, "blank_std_max": blank_max},
            "sheets": sheets_meta, "tiles": tiles,
            "applicability": {"masked": APPLICABILITY_MASKED, "note": APPLICABILITY_NOTE}}
+    # basis / coverage **只在取样模式写**（§3.6-3）：整片模式的字节必须与 0.12.0 完全一致。
+    if basis:
+        doc["basis"] = basis["relpath"]
+        cov = (basis.get("index") or {}).get("coverage")
+        if cov:
+            doc["coverage"] = cov
     info = {"cell": cell or fit_cell(box, box), "picked": len(picked), "cand": len(cand),
             "off": off, "missing": missing, "orphan_blank": orphan_blank,
             "range_txt": ("%s–%s%s" % (t_from, t_to, "")) if (t_from or t_to) else "",
-            "stale": stale}
+            "stale": stale, "coverage": doc.get("coverage")}
     return doc, info
 
-def verify(paths, doc: dict) -> list[str]:
+def verify(paths, doc: dict, basis=None) -> list[str]:
     """行列 → 帧 → t 反查自校验：面板、映射、源帧三者必须自洽。
 
     构建完就地跑一次 —— 面板是给写手看的"这里有东西"的索引，映射错了比没有更坏。
+    比对对象是 **doc 自己的 basis**（整片 = cache/frames/index.json；取样 = 取样包索引），
+    所以 §3.6-3 那条"t 与 index.json 一致"在取样模式下**不会假失败**。
     """
     problems = []
     names = [str(s.get("name")) for s in doc.get("sheets") or []]
     tiles = doc.get("tiles") or []
     pcols = int((doc.get("params") or {}).get("cols") or 0)
-    index = {str(f["file"]): float(f["t"]) for f in (frames_layer.load_index(paths) or [])}
+    root = (basis or {}).get("root") or paths.frames
+    index = {str(f["file"]): float(f["t"])
+             for f in ((basis or {}).get("frames") or frames_layer.load_index(paths) or [])}
+    label = (basis or {}).get("relpath") or "cache/frames/index.json"
     seen_slot, per_sheet = set(), {}
     for n, t in enumerate(tiles, start=1):
         if t.get("index") != n:
@@ -232,14 +262,23 @@ def verify(paths, doc: dict) -> list[str]:
             problems.append("col %r 超出 cols=%d" % (t.get("col"), pcols))
         if not (paths.meta_dir() / SHEETS_DIRNAME / sn).exists():
             problems.append("面板图不存在：%s" % sn)
-        fp = paths.frames / str(t.get("frame"))
+        fp = root / str(t.get("frame"))
         if not fp.exists():
             problems.append("源帧文件不存在：%s" % t.get("frame"))
             continue
         if str(t.get("sha256") or "") != sha256_file(fp):
             problems.append("源帧 sha256 与 tiles 记录不符：%s" % t.get("frame"))
         if str(t.get("frame")) in index and abs(index[str(t.get("frame"))] - float(t.get("t"))) > 1e-6:
-            problems.append("t 与 frames/index.json 不一致：%s" % t.get("frame"))
+            problems.append("t 与 %s 不一致：%s" % (label, t.get("frame")))
+        if basis and t.get("window") is not None:
+            secs = (basis.get("index") or {}).get("sections") or []
+            win = int(t["window"])
+            if not (0 <= win < len(secs)):
+                problems.append("tile %s 的 window=%d 超出 sections（共 %d 窗）" % (n, win, len(secs)))
+            elif not (float(secs[win]["orig_from"]) - 1e-6 <= float(t["t"])
+                      <= float(secs[win]["orig_to"]) + 1e-6):
+                problems.append("tile %s 的 t=%.3f 不在第 %d 窗 [%.3f, %.3f] 内"
+                                % (n, t["t"], win + 1, secs[win]["orig_from"], secs[win]["orig_to"]))
         per_sheet.setdefault(sn, []).append(t)
     for s in doc.get("sheets") or []:
         sn = str(s.get("name"))
@@ -267,18 +306,30 @@ def _rel(paths, path) -> str:
         return str(path)
 
 
-def run(cfg, paths, t_from=None, t_to=None, want=None, preset=None, cols=None, rows=None) -> dict:
-    """bnote sheet 的入口：拼版 → 写 sheet.json → 就地自校验 → 打印摘要。"""
+def run(cfg, paths, t_from=None, t_to=None, want=None, preset=None, cols=None, rows=None,
+        basis=None) -> dict:
+    """bnote sheet 的入口：拼版 → 写清单 → 就地自校验 → 打印摘要。
+
+    整片模式写 out/<vid>/_meta/sheet.json（与 0.12.0 一致）；取样模式写
+    out/<vid>/_meta/**sheet_sample.json**，面板用 sample_NN.png（与 sheet_NN.png 并存）。
+    两者分开的理由：面板引用校验读的是 sheet.json，一个文件装两种 basis 会互相覆盖。
+    """
     doc, info = build(cfg, paths, t_from=t_from, t_to=t_to, want=want,
-                      preset=preset, cols=cols, rows=rows)
-    dest = paths.meta_dir() / SHEET_JSON_NAME
+                      preset=preset, cols=cols, rows=rows, basis=basis)
+    dest = paths.meta_dir() / (SHEET_JSON_SAMPLE_NAME if basis else SHEET_JSON_NAME)
     paths.write_json(dest, doc)
-    problems = verify(paths, doc)
+    problems = verify(paths, doc, basis)
     p = doc["params"]
     print("[sheet] 预设 %s → 实际格 %dx%d（按源帧反推），%d×%d=%d 格/张 ｜ 上限 max_sheets=%d"
           % (p["preset"], info["cell"][0], info["cell"][1], p["cols"], p["rows"],
              p["cols"] * p["rows"], int((cfg.get("sheet") or {}).get("max_sheets", 8))))
-    if info["off"]:
+    if basis:
+        cov = info.get("coverage") or {}
+        print("[sheet] basis=取样包 ｜ %s ｜ 只覆盖 %.1f%% 时长（最大未采样间隔 %ss）"
+              " —— 面板**不代表全片**"
+              % (basis["relpath"], (cov.get("sampled_ratio") or 0) * 100,
+                 cov.get("uncovered_max_gap_sec")))
+    elif info["off"]:
         print("[sheet] media.sections 偏移 %.0fs 已换算（--from/--to 按媒体文件自己的时间轴给）" % info["off"])
     print("[sheet] 取样 %d 帧（候选 %d）%s"
           % (info["picked"], info["cand"],
@@ -300,6 +351,7 @@ def run(cfg, paths, t_from=None, t_to=None, want=None, preset=None, cols=None, r
         for s in problems[:8]:
             print("   ✗ %s" % s)
         raise SystemExit("sheet.json 与面板不一致，先按上面的条目查")
-    print("[sheet] 自校验通过：index 连续、行列唯一且行主序、t 与 frames/index.json 一致、源帧 sha256 一致")
+    print("[sheet] 自校验通过：index 连续、行列唯一且行主序、t 与 %s 一致、源帧 sha256 一致"
+          % ((basis or {}).get("relpath") or "cache/frames/index.json"))
     print("[sheet] 面板里的字一律不采信（缩放拼图）：要读字请用 bnote frames --read")
     return doc
