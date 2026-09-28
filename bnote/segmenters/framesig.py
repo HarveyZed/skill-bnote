@@ -660,21 +660,26 @@ def transient_overlay_corners(small: np.ndarray, big: np.ndarray, p: dict, rgb_c
         ratio = len(hits) / float(n)
         maxr = float(p["transient_max_ratio"])
         if len(hits) >= int(p["transient_min_frames"]) and ratio <= maxr:
-            verdict = "transient"
+            verdict, reason_kind = "transient", "hit"
             reason = ("角窗对时域中位的残差 >= %.3f 的帧占 %.2f%%（<= %.0f%%），且色块色调档数 >= %d"
                       " → 临时遮挡（框内取同页干净帧补回）"
                       % (float(p["transient_resid_min"]), 100 * ratio, 100 * maxr,
                          int(p["transient_color_min"])))
         elif ratio > maxr:
-            verdict = "resident"
-            reason = "出现率 %.1f%% > 阈值 %.0f%% → 按常驻处理，不动" % (100 * ratio, 100 * maxr)
+            # **有检出、但出现太频繁**：与下一条（什么都没检出）必须分开写，否则日志分不清
+            # 「半常驻的临时遮挡」与「这一角其实什么都没有」（2026-09-29 校准 §4.3-1）。
+            verdict, reason_kind = "resident", "ratio_over"
+            reason = ("检出临时遮挡帧占 %.1f%% > 瞬态门槛 %.0f%% → 出现太频繁，按常驻处理、不动像素"
+                      "（半常驻：切掉会伤内容）" % (100 * ratio, 100 * maxr))
         elif resident_ratio > maxr:
-            verdict = "resident"
-            reason = ("常驻判据（跨页不变量 + 纹理）的帧占 %.1f%% > 阈值 %.0f%%"
-                      " → 按常驻处理，不动" % (100 * resident_ratio, 100 * maxr))
+            # 只报数：本角**没有**通过瞬态判据的帧（hits 为空）。
+            verdict, reason_kind = "resident", "resident_detect"
+            reason = ("本角没有通过瞬态判据的帧；只报数——跨页不变量 + 纹理的帧占 %.1f%% > %.0f%%，"
+                      "可能是常驻信息区（水印 / 固定版式），**也可能什么都没有**；"
+                      "不产 transient、不动像素" % (100 * resident_ratio, 100 * maxr))
         else:
-            verdict = "clear"
-            reason = "没有同时满足「瞬态残差 + 纹理守卫 + 色板档数」的帧"
+            verdict, reason_kind = "clear", "no_candidate"
+            reason = "没有同时满足「瞬态残差 + 纹理守卫 + 色板档数」的帧（本角没有任何候选）"
         out.append({
             "corner": corner, "box": [round(x, 4) for x in box],
             "candidates": [int(x) for x in cand], "hits": hits, "hit_ratio": round(ratio, 5),
@@ -685,6 +690,6 @@ def transient_overlay_corners(small: np.ndarray, big: np.ndarray, p: dict, rgb_c
             "frame_resid_max": round(float(frame_resid.max()), 4),
             "votes_max": int(votes.max()) if n else 0,
             "resident_ratio": round(resident_ratio, 4),
-            "verdict": verdict, "reason": reason,
+            "verdict": verdict, "reason_kind": reason_kind, "reason": reason,
         })
     return out
