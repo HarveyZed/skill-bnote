@@ -199,6 +199,27 @@ def _rel(paths, path: Path) -> str:
         return path.name
 
 
+def _extract(cfg: dict, p: dict, paths, media_path: Path) -> list:
+    """从取样媒体抽帧 —— **唯一的**抽帧实现。
+
+    正常路径与"帧被 clean 后从现存媒体重抽"共用它：两处各写一份必然漂移，而重抽的价值
+    正是"零联网、几秒、且产物与原来一致"（index.json 不动，摘要不变）。
+    """
+    frames_dir = paths.sample_frames
+    frames_dir.mkdir(parents=True, exist_ok=True)
+    for old in sorted(frames_dir.glob("*.jpg")):
+        old.unlink()
+    cmd = [find_ffmpeg(cfg), "-y", "-hide_banner", "-loglevel", "error", "-i", str(media_path),
+           "-vf", _filter(p), "-q:v", str(int((cfg.get("frames") or {}).get("jpg_quality", 3))),
+           str(frames_dir / "%06d.jpg")]
+    print("[sample] %s" % " ".join(cmd))
+    subprocess.run(cmd, check=True)
+    files = sorted(frames_dir.glob("*.jpg"))
+    if not files:
+        raise SystemExit("ffmpeg 没有产出取样帧：%s（先看它上面的报错）" % frames_dir)
+    return files
+
+
 def _concat(cfg: dict, paths, parts: list) -> Path:
     """把各窗口拼成一个媒体文件（sample/media/sample_video.mp4）。
 
@@ -256,8 +277,15 @@ def run(cfg: dict, paths, force: bool = False, window_sec: float | None = None) 
                 "取样包的 index.json 还在，但取样媒体已不在（被 clean 过？）：\n"
                 "  媒体：%s\n  → 重跑 bnote sample --force" % sample_media)
         if not any(paths.sample_frames.glob("*.jpg")):
-            print("[sample] ⚠ 取样帧已不在（被 clean 过？）：%s —— index.json 仍有效，只是复算要先 --force"
+            # 帧被 clean 删掉、**媒体还在** → 从现存媒体重抽（零联网、几秒），而不是逼人 --force
+            # 重新联网下载 90 s 取样视频；重抽失败才降级为提醒（index.json 始终未动、仍有效）。
+            print("[sample] 取样帧已不在（被 clean 过）→ 从现存媒体重抽（零联网）：%s"
                   % paths.sample_frames)
+            try:
+                files = _extract(cfg, p, paths, sample_media)
+                print("[sample] 已重抽 %d 帧（index.json 未动，仍可复算）" % len(files))
+            except Exception as exc:
+                print("[sample] ⚠ 重抽失败（%s）：index.json 仍有效，要复算请 --force" % exc)
         doc = paths.read_json(dest) or {}
         print("[sample] 已存在，跳过（--force 重跑）：%s" % _rel(paths, dest))
         print(coverage_line(doc))
@@ -292,19 +320,8 @@ def run(cfg: dict, paths, force: bool = False, window_sec: float | None = None) 
     media_path = _concat(cfg2, paths, parts)
     print("[sample] 窗口串: %s" % sections_param(sections))
 
-    # ---- ② 抽帧（只用取样媒体，不碰整片帧）
-    frames_dir = paths.sample_frames
-    frames_dir.mkdir(parents=True, exist_ok=True)
-    for old in sorted(frames_dir.glob("*.jpg")):
-        old.unlink()
-    cmd = [find_ffmpeg(cfg2), "-y", "-hide_banner", "-loglevel", "error", "-i", str(media_path),
-           "-vf", _filter(p), "-q:v", str(int((cfg2.get("frames") or {}).get("jpg_quality", 3))),
-           str(frames_dir / "%06d.jpg")]
-    print("[sample] %s" % " ".join(cmd))
-    subprocess.run(cmd, check=True)
-    files = sorted(frames_dir.glob("*.jpg"))
-    if not files:
-        raise SystemExit("ffmpeg 没有产出取样帧：%s（先看它上面的报错）" % frames_dir)
+    # ---- ② 抽帧（只用取样媒体，不碰整片帧）—— 与"帧被 clean 后重抽"共用同一段代码
+    files = _extract(cfg2, p, paths, media_path)
 
     # ---- ③ 实测时长 + 建索引（t 走分段线性）
     info = probe_media(cfg2, media_path)
