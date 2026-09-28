@@ -14,6 +14,7 @@ import shutil
 import time
 from pathlib import Path
 
+from . import composite as composite_layer
 from . import slideset as slideset_layer
 
 FENCE = chr(96) * 3
@@ -87,9 +88,15 @@ def build(cfg: dict, paths, meta: dict, transcript: dict, seg_data: dict) -> dic
         old.unlink()
 
     segments = seg_data["segments"]
+    # §3.4-11 重立项：临时遮挡的**同页无遮挡镶嵌**必须在拷贝之前算 —— 终态帧的角上如果被
+    # 临时 UI（标注工具条 / 菜单）压住，就把框内换成同页干净帧、框外仍是终态帧。
+    # 只改交付图，**不动 cache/frames 里的任何原始帧**；账记在 _meta/composite.json。
+    comp = composite_layer.prepare(cfg, paths, segments)
+    print(composite_layer.summary_line(comp))
+    comp_by_id = {r["id"]: r for r in comp["records"]}
     slides = []
     for seg in segments:
-        src = paths.frames / seg["chosen"]["file"]
+        src = comp["src"].get(seg["id"]) or (paths.frames / seg["chosen"]["file"])
         dst = slides_dir / ("%04d.jpg" % seg["id"])
         if src.exists():
             shutil.copyfile(src, dst)
@@ -112,6 +119,11 @@ def build(cfg: dict, paths, meta: dict, transcript: dict, seg_data: dict) -> dic
             "merged_from": seg.get("merged_from", []),
             "boundary_evidence": seg.get("boundary_evidence"),
         })
+        # 这一页做过合成才写：源帧 / 两个守卫数值 / 文件（不进 slideset 摘要 —— 摘要只认
+        # id/页界/frame/chosen_t/sha256，见 slideset.page_rows）
+        rec = comp_by_id.get(seg["id"])
+        if rec and rec.get("applied"):
+            slides[-1]["composite"] = rec
     # 这一版切片的身份（顶层 slideset）：摘要只用 out/ 里的 id/页界/frame/sha256，跨机可复算。
     doc = {"vid": paths.vid, "strategy": seg_data.get("strategy"),
            "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
