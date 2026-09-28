@@ -30,6 +30,7 @@ import time
 from pathlib import Path
 
 from . import refs as refs_layer
+from . import roles as roles_layer       # 可当主图的角色（PAGE_ROLES）单点定义在这里
 from . import slideset as slideset_layer
 
 FENCE = chr(96) * 3
@@ -301,13 +302,14 @@ def _check_roles(paths, warns: list, errors: list) -> None:
         if not crole and not any(roles):
             legacy += 1
             continue
-        if crole and crole != "full_page" and "full_page" in roles:
+        # "可当主图"的角色：full_page 与 M4b 的 app_screen（整屏 IDE/浏览器/终端录屏也是整屏内容）
+        if crole and crole not in roles_layer.PAGE_ROLES and any(r in roles_layer.PAGE_ROLES for r in roles):
             errors_found += 1
             errors.append(_err(
-                "第 %s 页终选帧不是整页（role=%s），但本段存在整页候选 —— 整页优先没生效"
-                % (seg.get("id"), crole), "pipeline",
+                "第 %s 页终选帧不是整页/整屏内容（role=%s），但本段存在可当主图的候选 —— "
+                "整页优先没生效" % (seg.get("id"), crole), "pipeline",
                 fix="重跑 bnote slides <URL> --page N --force（再 bnote bundle）"))
-        elif crole and "full_page" not in roles:
+        elif crole and not any(r in roles_layer.PAGE_ROLES for r in roles):
             nofull.append(str(seg.get("id")))
     sj = paths.out / "slides.json"
     pages = (paths.read_json(sj) or {}).get("slides") if sj.exists() else None

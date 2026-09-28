@@ -128,13 +128,13 @@ def _mask_cells(masks, rows, cols):
     return keep
 
 
-def _build_signals(cfg, paths, frames, masks=None, strokes=None):
+def _build_signals(cfg, paths, frames, masks=None, strokes=None, app=None):
     region = tuple(cfg["frames"].get("region") or (0, 0, 1, 1))
     sigs, cheap = [], []
     keep = None
     for f in frames:
         p = paths.frames / f["file"]
-        s = signature(p, region, masks, strokes=strokes)
+        s = signature(p, region, masks, strokes=strokes, app=app)
         sigs.append(s)
         if keep is None:
             keep = _mask_cells(masks, s[0].shape[0], s[0].shape[1])
@@ -303,7 +303,10 @@ def _cand_doc(c: dict) -> dict:
     """候选帧落盘的字段（角色与判据一起写进去，check 要靠它判"整页优先"是否生效）。"""
     return {"t": c["t"], "file": c["file"], "score": round(c["score"], 4),
             "ocr_chars": c["ocr_chars"], "ink": round(c["ink"], 4),
-            "role": c.get("role"), "role_evidence": c.get("role_evidence")}
+            "role": c.get("role"), "role_evidence": c.get("role_evidence"),
+            # M4b「遮挡最少」的判据数字：最大连通前景块占整幅的比例（越大=被挡得越多）。
+            # 它只作**同页候选之间**的相对比较（同页背景相同），不跨页比。
+            "occlusion": c.get("occlusion")}
 
 
 def _union_cands(dst: dict, src: dict) -> None:
@@ -322,14 +325,24 @@ def _chosen_doc(c: dict) -> dict:
             "role": c.get("role"), "role_evidence": c.get("role_evidence")}
 
 
-def _apply_roles(cfg, paths, out, masks, role_fn) -> None:
-    """M4：判角色 → **整页优先**选帧（§3.5-2/3）。
+# M4b「遮挡最少」的两个门槛（都在 [segment] 段可覆盖，见 config/default.toml）：
+#   occ_score_tol：只在"信息量接近"的候选之间比遮挡 —— 打分差超过这个比例就不换，
+#     否则会把**动画中途**的不完整帧（信息少但没被挡）选成主图，那是 M4 一直在防的退化。
+#   occ_min_gain：遮挡要明显更少才值得换（同一页内最大连通前景块的占比差）。
+def _apply_roles(cfg, paths, out, masks, role_fn, page_roles=("full_page",)) -> None:
+    """M4/M4b：判角色 → **整页优先** + **遮挡最少**选帧（§3.5-2/3 + M4b）。
 
-    三件事，顺序不能换：
+    四件事，顺序不能换：
       1) 把全集候选帧交给角色层一次性判完（同一文件只读一次；笔画中位数是**本集口径**）；
-      2) 每段：只要存在 full_page 候选，终态就必须换成其中得分最高的那一张；
-      3) 每段写 role / role_evidence（取自终选帧），候选表里也各写一份（check 靠它复核）。
+      2) 每段：只要存在可当主图的候选（page_roles，full_page 优先、其次 app_screen），
+         终态就必须换成它们里的一张；
+      3) 在这一档候选里，**信息量接近**（打分 >= best*(1-occ_score_tol)）而**遮挡明显更少**
+         （occlusion <= 当前 - occ_min_gain）时换帧 —— "人/桌面挡住半页"的那张让位；
+      4) 每段写 role / role_evidence（取自终选帧），候选表里也各写一份（check 靠它复核）。
     """
+    segcfg = cfg.get("segment") or {}
+    score_tol = float(segcfg.get("occ_score_tol", 0.10))
+    min_gain = float(segcfg.get("occ_min_gain", 0.10))
     files = []
     for seg in out:
         for c in (seg.get("_cands") or []):
@@ -343,19 +356,42 @@ def _apply_roles(cfg, paths, out, masks, role_fn) -> None:
             r = res.get(c.get("file"))
             c["role"] = r["role"] if r else None
             c["role_evidence"] = r["evidence"] if r else None
+            c["occlusion"] = (r["features"].get("occlusion") if r else None)
         chosen = seg.get("chosen") or {}
         # 终选帧在候选表里的那条记录（角色 / 判据都挂在候选上；chosen 自己不带）
         cur = next((c for c in cands if c.get("file") == chosen.get("file")), None)
-        full = [c for c in cands if c.get("role") == "full_page"]
-        if full and (cur is None or cur.get("role") != "full_page"):
-            best = max(full, key=lambda c: c["score"])
+        # "可当主图"的候选：full_page 与 app_screen **同等对待**（app_screen 仍是整屏内容，
+        # M4b 的语义就是"整页优先照旧可作主图"，不做分档，否则 P53 这种整集 IDE 录屏会被
+        # 强行换成同一页里得分更高的幻灯片式候选，反而偏离基线）
+        pool = [c for c in cands if c.get("role") in page_roles]
+        if pool and (cur is None or cur.get("role") not in page_roles or cur not in pool):
+            best = max(pool, key=lambda c: c["score"])
             if best.get("file") != chosen.get("file"):
                 switched += 1
-                print("[stable] 第 %s 页整页优先：终选 %s（%s）→ %s（full_page，得分 %.4f）"
+                print("[stable] 第 %s 页整页优先：终选 %s（%s）→ %s（%s，得分 %.4f）"
                       % (seg.get("id"), chosen.get("file"),
-                         (cur.get("role") if cur else "未判"), best.get("file"), best["score"]))
+                         (cur.get("role") if cur else "未判"), best.get("file"),
+                         best.get("role"), best["score"]))
             seg["chosen"] = _chosen_doc(best)
             cur = best
+        # M4b-3：同档候选里挑遮挡最少的（只换"信息量接近且遮挡明显更少"的）
+        if pool and cur is not None:
+            top = max(c["score"] for c in pool)
+            cur_occ = cur.get("occlusion")
+            cands_ok = [c for c in pool
+                        if c["score"] >= top * (1.0 - score_tol)
+                        and c.get("occlusion") is not None
+                        and (cur_occ is None or c["occlusion"] <= cur_occ - min_gain)]
+            if cands_ok:
+                best = min(cands_ok, key=lambda c: (c["occlusion"], -c["score"]))
+                if best.get("file") != cur.get("file"):
+                    switched += 1
+                    print("[stable] 第 %s 页遮挡最少：%s（occlusion %.3f，得分 %.4f）→ %s"
+                          "（occlusion %.3f，得分 %.4f）"
+                          % (seg.get("id"), cur.get("file"), cur_occ or 0.0, cur["score"],
+                             best.get("file"), best["occlusion"], best["score"]))
+                    seg["chosen"] = _chosen_doc(best)
+                    cur = best
         if cur is not None and cur.get("role"):
             seg["role"] = cur["role"]
             seg["role_evidence"] = cur.get("role_evidence")
@@ -364,7 +400,7 @@ def _apply_roles(cfg, paths, out, masks, role_fn) -> None:
             seg["chosen"]["role_evidence"] = cur.get("role_evidence")
         seg["candidates"] = [_cand_doc(c) for c in cands]
     if switched:
-        print("[stable] 整页优先共换帧 %d 处" % switched)
+        print("[stable] 角色选帧共换帧 %d 处" % switched)
 
 
 def _snap_to_transcript(t, transcript, window):
@@ -380,7 +416,7 @@ def _snap_to_transcript(t, transcript, window):
     return t, None
 
 
-def segment(cfg, paths, frames, transcript, ocr, role_fn=None):
+def segment(cfg, paths, frames, transcript, ocr, role_fn=None, page_roles=("full_page",)):
     fps = float(cfg["frames"]["fps"])
     th = float(cfg["segment"]["diff_threshold"])
     min_sec = float(cfg["segment"]["stable_min_sec"])
@@ -396,9 +432,13 @@ def segment(cfg, paths, frames, transcript, ocr, role_fn=None):
               "重跑 bnote slides 会自动产出它")
     else:
         print("[stable] overlay.json 里没有可采信的遮挡框（只有手写笔迹判据）→ 帧差/墨迹按**全画面**算")
+    app = None
     if strokes:
-        print("[stable] 按 overlay.json 的 handwriting 判据**逐帧**挖掉彩色细笔画（笔迹不进帧差/墨迹/OCR）")
-    sigs, cheap, diffs = _build_signals(cfg, paths, frames, masks, strokes)
+        # M4b：手写守卫 —— 整屏应用/录屏（IDE/浏览器/终端）帧整帧跳过涂白，参数与角色判据同源
+        app = dict((cfg.get("roles") or {}))
+        print("[stable] 按 overlay.json 的 handwriting 判据**逐帧**挖掉彩色细笔画（笔迹不进帧差/墨迹/OCR）；"
+              "app_screen 帧跳过（整屏 UI 不是手写）")
+    sigs, cheap, diffs = _build_signals(cfg, paths, frames, masks, strokes, app)
     strip, strip_region = (None, None)
     if not masks:
         # 旧路径（无 overlay.json）保留冻结的旧实现，结果与 M3 之前逐字节一致
@@ -613,7 +653,7 @@ def segment(cfg, paths, frames, transcript, ocr, role_fn=None):
 
     # M4：角色分类 + 整页优先（放在合并/吸收/吸附之后，作用在**最终**的段与候选集上）
     if role_fn is not None:
-        _apply_roles(cfg, paths, out, masks, role_fn)
+        _apply_roles(cfg, paths, out, masks, role_fn, page_roles)
 
     for seg in out:
         seg.pop("_idx", None)

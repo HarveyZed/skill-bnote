@@ -124,8 +124,11 @@ fetch      只取数（meta + media + subtitle），不做抽帧/切片
 stream     信息流/口播类（无幻灯片）：取音频+字幕 → 分段分块 → 整理稿（--assemble 拼接+校验）
 meta       只取元信息（BV/p/cid/标题/时长/**简介/标签/分区/UP 置顶评论**；旧缓存会自动补取）
 slides     只做抽帧 + 切片 + OCR（改了切片参数后重跑它，再跑 bundle）；M3 起顺序是抽帧 → overlay → 切片；
-           M4 起切片前还会做**帧角色分类 + 整页优先**：段内只要存在 full_page 候选，终态就必须选整页
-           （每段写 role / role_evidence，候选表逐帧带 role，bundle 再把它们镜像进 slides.json 每页）
+           M4 起切片前还会做**帧角色分类 + 整页优先 + 遮挡最少**：段内只要存在可当主图的候选
+           （full_page 或 app_screen）就不能选别的；同一档候选里再挑**遮挡最少**的那张（信息量接近时）。
+           每段写 role / role_evidence，候选表逐帧带 role 与 occlusion，bundle 再把它们镜像进
+           slides.json 每页。M4b 的第六个角色 app_screen = 整屏 IDE/浏览器/终端/桌面录屏：
+           **仍是整屏内容、整页优先照旧可作主图**，只是不走手写涂白（见 overlay 那条）
 bundle     只重建交付物（slides/ + slides.json + transcript.md），并快照旧讲义；slides.json 顶层写这一版切片的指纹
            `slideset`（每页含 frame/chosen_t/sha256）—— 摘要只依赖 out/，cache 删掉也能复算
 overlay    M3 遮挡区识别：从**已抽出的帧**里认出"不是幻灯片内容"的那几块像素 → cache/<vid>/overlay.json
@@ -136,7 +139,10 @@ overlay    M3 遮挡区识别：从**已抽出的帧**里认出"不是幻灯片�
            不静默返回空。切片与量测都读它；没有它时两者退化为全画面并在日志说明。
            M4 起还有第三条 ③ color_stroke：**手写笔迹**（彩色细笔画）→ kind=handwriting 的区域。
            它**只用于把笔迹从 OCR 与帧差/墨迹里排除，交付图照旧保留笔迹**，而且消费方按判据参数
-           **逐帧**重算掩膜、**不按 box 整块挖**（笔迹逐帧移动累积，整块挖会伤其余页同位置的正文））
+           **逐帧**重算掩膜、**不按 box 整块挖**（笔迹逐帧移动累积，整块挖会伤其余页同位置的正文）。
+           M4b 两道收紧：判据按**厚度**区分笔画与实心色块（红底白字条上的字不再被吃掉）、亮度下限
+           收到 0.80（桌面壁纸/网页深色区/IDE 主题里的彩色图标不算笔迹）；并且**整屏应用帧
+           （app_screen）整帧跳过手写判定与涂白**（那里没有手写））
 measure    零 token 媒体验测：**一次解码**量出逐秒运动 + 切点/冻结段/静音段 → cache/<vid>/measure.json
            （只读媒体文件，另可选读 cache/frames/index.json 给"抽了几帧、可能漏什么"的上界；
            进度/帧数/最大间隔都写进产物的 coverage；**M3 起按遮罩算**：有 overlay.json 就给同一条
@@ -161,8 +167,9 @@ retime     按 slides.json 幂等重写小节时间行（时间由工具生成�
 check      结构校验；--chapter 06,07 限定作用域（写手自检用）。含切片身份：顶层指纹不符 = 整集错版（error）、
            某章指纹不符 = 该章需重派写手（error）、逐页图片 sha256 不符 = 图被替换（error）、
            缺指纹的存量产物与 remap 留痕 = warn
-           M4 角色（§3.5-2）：段内存在 full_page 候选却选了非整页 = error（owner=pipeline，fix 指向重跑 slides）；
-           整段没有整页候选 = warn（工具判不了，不把产物判红）；旧产物无 role = warn
+           M4 角色（§3.5-2）：段内存在可当主图的候选（full_page / app_screen）却选了别的 = error
+           （owner=pipeline，fix 指向重跑 slides）；整段没有可当主图的候选 = warn（工具判不了，不把产物
+           判红）；旧产物无 role = warn
 merge      合并讲义（结构校验通过才落盘）+ 刷新 note_brief
 note       校验 note.md + 导出钩子
 export     导出可粘贴进 B 站笔记的富文本（--format bili-note；--from lecture|note；CF_HTML + Windows 装载脚本；不调平台写接口）

@@ -29,7 +29,8 @@ def build(cfg: dict, paths, frames: list[dict], transcript: dict | None, ocr, fo
     print("[segment] 策略=%s，帧数=%d，OCR=%s" % (name, len(frames), "on" if ocr.available else "off"))
     # M4：角色分类由本层**注入**给切片策略，而不是让 segmenters/stable.py 去 import layers/roles
     # （P1：L5 不反向依赖 L4）。策略拿到的 role_fn 就是 roles.classify_set。
-    segments = fn(cfg, paths, frames, transcript, ocr, role_fn=roles_layer.classify_set)
+    segments = fn(cfg, paths, frames, transcript, ocr, role_fn=roles_layer.classify_set,
+                  page_roles=roles_layer.PAGE_ROLES)
     data = {"strategy": name, "frame_count": len(frames), "video": paths.vid,
             "segments": segments}
     paths.write_json(paths.segments, data)
